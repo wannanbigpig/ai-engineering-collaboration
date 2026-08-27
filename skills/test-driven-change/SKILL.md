@@ -4,7 +4,7 @@ description: "Bug/功能变更的测试先行策略，含明确例外和修复�
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.0.0
+  version: 1.2.0
 ---
 
 # 测试先行的变更

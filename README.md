@@ -2,7 +2,7 @@
 
 一组面向真实工程任务的可组合 Agent Skills。它以 `ai-engineering-collaboration` 为主入口：入口负责发现项目规则、维护非平凡任务记录、按需选择专项阶段，并用新鲜证据完成交付。
 
-当前发布版本：[1.0.0](VERSION)。仓库内全部 10 个 Skill 使用同一版本号。
+当前发布版本：[1.2.0](VERSION)。仓库内全部 10 个 Skill 使用同一版本号。
 
 ## 适合解决什么
 
@@ -31,6 +31,20 @@ npx skills@latest add wannanbigpig/ai-engineering-collaboration --all
 入口会自行决定是否需要需求定界、影响分析、方案实施、调试、测试先行、验证或审查；不需要手动选择下游 Skill。只安装入口也可以使用，但缺少的专项 Skill 无法被加载，入口只能采用通用最小流程。
 
 `skills` CLI 的具体发现目录和自动触发行为由所用 Harness 决定。仓库提供标准 `SKILL.md`，并为 Codex 提供可选的 `agents/openai.yaml` UI 元数据；其他 Harness 可忽略该文件。
+
+如果希望将完整 Skill 组合与最小项目级规则一次安装到某个项目，使用本仓库的初始化脚本：
+
+```bash
+python3 scripts/bootstrap_project.py --target /absolute/path/to/your-project
+```
+
+脚本不会覆盖内容不同的同名 Skill，并会保留已有 `AGENTS.md` 内容。账户级 Custom Instructions 需要手动在 Codex 设置中粘贴；完整说明见 [项目初始化与 Custom Instructions](docs/project-bootstrap.md)。
+
+需要让完整 Skill 组合对当前用户的所有项目生效时，运行：
+
+    python3 scripts/bootstrap_project.py --scope user
+
+该模式只写入 ~/.agents/skills/，不修改任何项目文件。
 
 ## 工作方式
 
@@ -69,6 +83,8 @@ for skill in skills/*; do
   test "$(sed -n 's/^  version: //p' "$skill/SKILL.md")" = "$release"
   uvx --from 'skills-ref==0.1.1' agentskills validate "$skill"
 done
+
+python3 -m unittest -v tests/test_bootstrap_project.py
 
 git diff --check
 ```

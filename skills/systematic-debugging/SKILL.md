@@ -4,7 +4,7 @@ description: "本地 Bug、测试、构建、性能和集成问题的证据化�
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.0.0
+  version: 1.2.0
 ---
 
 # 系统化调试

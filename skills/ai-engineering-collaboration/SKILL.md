@@ -4,7 +4,7 @@ description: "工程协作主入口：承接完整工程任务，自动执行规
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.0.0
+  version: 1.2.0
 ---
 
 # AI 工程协作

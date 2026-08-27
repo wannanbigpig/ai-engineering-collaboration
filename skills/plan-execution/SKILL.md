@@ -4,7 +4,7 @@ description: "按已确认方案实施工程任务：先核对方案与最新工
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.0.0
+  version: 1.2.0
 ---
 
 # 方案实施

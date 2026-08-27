@@ -4,7 +4,7 @@ description: "需求、边界、验收标准或关键决策不明确时的轻量
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.0.0
+  version: 1.2.0
 ---
 
 # 需求定界

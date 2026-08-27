@@ -18,6 +18,14 @@ git diff --check
 
 GitHub Actions 运行同一版本一致性检查和 `agentskills validate`。这只能验证文件结构，不代表某个 Harness 已实际发现、加载或执行了 Skill。
 
+## 项目初始化脚本测试
+
+```bash
+python3 -m unittest -v tests/test_bootstrap_project.py
+```
+
+测试在临时 Git 项目中验证首次安装、重复运行、dry-run、冲突拒绝、`.aitasks` 跟踪选项和 Custom Instructions 输出。GitHub Actions 也运行该测试。
+
 ## `.aitasks` CLI smoke test
 
 在临时项目中运行，不要对真实项目直接使用 `cleanup --apply`：
