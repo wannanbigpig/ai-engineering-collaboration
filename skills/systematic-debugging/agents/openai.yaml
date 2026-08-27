@@ -1,0 +1,4 @@
+interface:
+  display_name: "系统化调试"
+  short_description: "Find root causes for local engineering failures"
+  default_prompt: "使用 $systematic-debugging 定位当前本地故障的根因并验证修复。"

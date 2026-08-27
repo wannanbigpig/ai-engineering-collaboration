@@ -1,0 +1,4 @@
+interface:
+  display_name: "代码审查"
+  short_description: "Perform read-only, evidence-based code review"
+  default_prompt: "使用 $code-review 只读审查当前改动，并给出有证据的发现。"

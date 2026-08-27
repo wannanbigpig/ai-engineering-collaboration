@@ -1,0 +1,4 @@
+interface:
+  display_name: ".aitasks 维护"
+  short_description: "Maintain engineering plans, lessons, and archives"
+  default_prompt: "使用 $aitasks-maintenance 维护当前项目的 todo、经验或归档记录。"

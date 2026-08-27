@@ -1,0 +1,4 @@
+interface:
+  display_name: "需求定界"
+  short_description: "Clarify scope, decisions, and acceptance criteria"
+  default_prompt: "使用 $requirements-framing 收敛当前需求的范围、关键决策和验收标准。"

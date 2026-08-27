@@ -1,0 +1,4 @@
+interface:
+  display_name: "变更影响分析"
+  short_description: "Assess change scope before implementation"
+  default_prompt: "使用 $change-impact-analysis 分析当前变更的范围、调用链和风险。"

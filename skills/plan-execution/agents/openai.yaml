@@ -1,0 +1,4 @@
+interface:
+  display_name: "方案实施"
+  short_description: "Implement approved plans in verifiable slices"
+  default_prompt: "使用 $plan-execution 按当前代码和已确认方案实施可验证切片。"
