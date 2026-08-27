@@ -1,4 +1,4 @@
 interface:
   display_name: "测试先行变更"
-  short_description: "Drive tested feature and bug changes"
+  short_description: "以测试驱动功能与 Bug 变更"
   default_prompt: "使用 $test-driven-change 以测试先行方式完成当前功能或 Bug 变更。"

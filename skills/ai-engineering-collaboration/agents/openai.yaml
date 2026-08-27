@@ -1,4 +1,4 @@
 interface:
   display_name: "AI 工程协作"
-  short_description: "Govern full engineering tasks from one entry"
+  short_description: "工程协作主入口：统筹完整工程任务"
   default_prompt: "使用 $ai-engineering-collaboration 处理当前工程任务，并按项目规则完成规划、实施和验证。"

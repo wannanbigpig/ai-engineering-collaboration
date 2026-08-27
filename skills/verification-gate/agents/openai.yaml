@@ -1,4 +1,4 @@
 interface:
   display_name: "验证关卡"
-  short_description: "Collect evidence before completion or release"
+  short_description: "在完成或发布前收集验证证据"
   default_prompt: "使用 $verification-gate 核对当前完成或发布声明所需的验证证据。"

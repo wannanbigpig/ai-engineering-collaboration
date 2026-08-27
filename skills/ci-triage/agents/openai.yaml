@@ -1,4 +1,4 @@
 interface:
   display_name: "CI 归因"
-  short_description: "Identify causes of remote CI pipeline failures"
+  short_description: "定位远程 CI 流水线失败根因"
   default_prompt: "使用 $ci-triage 归因当前远程 CI 或构建流水线失败。"
