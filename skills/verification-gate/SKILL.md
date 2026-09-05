@@ -4,7 +4,7 @@ description: "完成/修复/可发布声明前的验证关卡：重跑命令、�
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.2.0
+  version: 1.3.0
 ---
 
 # 验证关卡

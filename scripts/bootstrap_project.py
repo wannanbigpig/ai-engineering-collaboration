@@ -14,6 +14,7 @@ from pathlib import Path
 
 AGENTS_BEGIN = "<!-- ai-engineering-collaboration:begin -->"
 AGENTS_END = "<!-- ai-engineering-collaboration:end -->"
+GEMINI_LINK_TARGET = "../../.agents/skills"
 MANAGED_AGENTS_SECTION = f"""{AGENTS_BEGIN}
 # AI Engineering Collaboration
 
@@ -207,6 +208,55 @@ def copy_skills(install_sources: list[Path], destination_root: Path) -> None:
         shutil.copytree(source, destination_root / source.name)
 
 
+def gemini_link_plan(
+    sources: list[Path], destination_root: Path
+) -> tuple[list[Path], list[Path], list[str]]:
+    """Plan symlinks that expose the installed skills to Gemini CLI.
+
+    Gemini CLI discovers skills in ~/.gemini/skills and <project>/.gemini/skills
+    and never reads .agents/skills, so each skill needs a link there.
+    """
+    if destination_root.exists() and not destination_root.is_dir():
+        raise BootstrapError(f"Expected a directory or no path at: {destination_root}")
+
+    link_sources: list[Path] = []
+    current_links: list[Path] = []
+    conflicts: list[str] = []
+    for source in sources:
+        link = destination_root / source.name
+        expected = destination_root / GEMINI_LINK_TARGET / source.name
+        if link.is_symlink():
+            if link.resolve() == expected.resolve():
+                current_links.append(link)
+            else:
+                conflicts.append(
+                    f"{link} is not a managed Gemini link (points to {link.readlink()})"
+                )
+        elif link.exists():
+            if link.is_dir() and file_manifest(source) == file_manifest(link):
+                current_links.append(link)
+            else:
+                conflicts.append(
+                    f"{link} exists but is not a managed Gemini link or an identical Skill copy"
+                )
+        else:
+            link_sources.append(link)
+    return link_sources, current_links, conflicts
+
+
+def create_gemini_links(links: list[Path]) -> None:
+    for link in links:
+        link.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            link.symlink_to(f"{GEMINI_LINK_TARGET}/{link.name}", target_is_directory=True)
+        except OSError as error:
+            raise BootstrapError(
+                f"Failed to create Gemini link {link}: {error}. "
+                "The .agents/skills copies are intact; create this link manually "
+                "or rerun on a filesystem that supports symbolic links."
+            ) from error
+
+
 def install_project(target: Path, dry_run: bool, track_aitasks: bool) -> int:
     root = repository_root()
     target = target.expanduser().resolve()
@@ -221,6 +271,10 @@ def install_project(target: Path, dry_run: bool, track_aitasks: bool) -> int:
         sources, destination_root
     )
 
+    gemini_root = target / ".gemini" / "skills"
+    gemini_links, gemini_current, gemini_conflicts = gemini_link_plan(sources, gemini_root)
+    conflicts = conflicts + gemini_conflicts
+
     agents_path = target / "AGENTS.md"
     existing_agents = read_regular_file(agents_path)
     rendered_agents = render_agents(existing_agents)
@@ -232,6 +286,10 @@ def install_project(target: Path, dry_run: bool, track_aitasks: bool) -> int:
 
     planned: list[str] = []
     planned.extend(f"install {source.name}" for source in install_sources)
+    planned.extend(
+        f"link {link.relative_to(target)} -> {GEMINI_LINK_TARGET}/{link.name}"
+        for link in gemini_links
+    )
     if rendered_agents != existing_agents:
         planned.append(f"update {agents_path.relative_to(target)}")
     if rendered_gitignore is not None:
@@ -246,6 +304,7 @@ def install_project(target: Path, dry_run: bool, track_aitasks: bool) -> int:
         return 0
 
     copy_skills(install_sources, destination_root)
+    create_gemini_links(gemini_links)
     if rendered_agents != existing_agents:
         atomic_write(agents_path, rendered_agents)
     if rendered_gitignore is not None:
@@ -253,6 +312,10 @@ def install_project(target: Path, dry_run: bool, track_aitasks: bool) -> int:
 
     print(
         f"Skills: {len(install_sources)} installed, {len(current_sources)} already current."
+    )
+    print(
+        f"Gemini: {len(gemini_links)} linked, {len(gemini_current)} already current "
+        f"in {gemini_root.relative_to(target)}."
     )
     if rendered_agents != existing_agents:
         print("AGENTS.md: managed collaboration section installed.")
@@ -275,24 +338,35 @@ def install_user(dry_run: bool) -> int:
     install_sources, current_sources, conflicts = skill_install_plan(
         sources, destination_root
     )
-    if conflicts:
-        return report_skill_conflicts(conflicts)
+
+    gemini_root = Path.home() / ".gemini" / "skills"
+    gemini_links, gemini_current, gemini_conflicts = gemini_link_plan(sources, gemini_root)
+    if conflicts or gemini_conflicts:
+        return report_skill_conflicts(conflicts + gemini_conflicts)
 
     if dry_run:
         print("Dry run:")
         for source in install_sources:
             print(f"- install {source.name}")
-        if not install_sources:
+        for link in gemini_links:
+            print(f"- link {link} -> {GEMINI_LINK_TARGET}/{link.name}")
+        if not install_sources and not gemini_links:
             print("- no changes required")
         print(f"- user Skill directory: {destination_root}")
+        print(f"- Gemini link directory: {gemini_root}")
         return 0
 
     copy_skills(install_sources, destination_root)
+    create_gemini_links(gemini_links)
     print(
         f"User Skills: {len(install_sources)} installed, "
         f"{len(current_sources)} already current."
     )
-    print(f"Installed only in: {destination_root}")
+    print(
+        f"Gemini Skills: {len(gemini_links)} linked, "
+        f"{len(gemini_current)} already current."
+    )
+    print(f"Installed only in: {destination_root} and {gemini_root}")
     print("No AGENTS.md, .gitignore, or project files were changed.")
     print("Paste global Custom Instructions manually with --print-custom-instructions.")
     return 0

@@ -2,7 +2,7 @@
 
 一组面向真实工程任务的可组合 Agent Skills。它以 `ai-engineering-collaboration` 为主入口：入口负责发现项目规则、维护非平凡任务记录、按需选择专项阶段，并用新鲜证据完成交付。
 
-当前发布版本：[1.2.0](VERSION)。仓库内全部 10 个 Skill 使用同一版本号。
+当前发布版本：[1.3.0](VERSION)。仓库内全部 10 个 Skill 使用同一版本号。
 
 ## 适合解决什么
 
@@ -38,13 +38,13 @@ npx skills@latest add wannanbigpig/ai-engineering-collaboration --all
 python3 scripts/bootstrap_project.py --target /absolute/path/to/your-project
 ```
 
-脚本不会覆盖内容不同的同名 Skill，并会保留已有 `AGENTS.md` 内容。账户级 Custom Instructions 需要手动在 Codex 设置中粘贴；完整说明见 [项目初始化与 Custom Instructions](docs/project-bootstrap.md)。
+脚本不会覆盖内容不同的同名 Skill，并会保留已有 `AGENTS.md` 内容。它还会在项目 `.gemini/skills/` 为每个 Skill 建立指向 `.agents/skills/` 的相对软链接，供 Gemini CLI 发现。账户级 Custom Instructions 需要手动在 Codex 设置中粘贴；完整说明见 [项目初始化与 Custom Instructions](docs/project-bootstrap.md)。
 
 需要让完整 Skill 组合对当前用户的所有项目生效时，运行：
 
     python3 scripts/bootstrap_project.py --scope user
 
-该模式只写入 ~/.agents/skills/，不修改任何项目文件。
+该模式只写入 ~/.agents/skills/，并在 ~/.gemini/skills/ 建立相对软链接供 Gemini CLI 发现，不修改任何项目文件。
 
 ## 工作方式
 

@@ -24,7 +24,7 @@ GitHub Actions 运行同一版本一致性检查和 `agentskills validate`。这
 python3 -m unittest -v tests/test_bootstrap_project.py
 ```
 
-测试在临时 Git 项目中验证首次安装、重复运行、dry-run、冲突拒绝、`.aitasks` 跟踪选项和 Custom Instructions 输出。GitHub Actions 也运行该测试。
+测试在临时 Git 项目中验证首次安装、重复运行、dry-run、冲突拒绝、`.aitasks` 跟踪选项、Custom Instructions 输出，以及 Gemini 链接的创建、幂等、相同副本保留、冲突拒绝和失败指引。GitHub Actions 也运行该测试。
 
 ## `.aitasks` CLI smoke test
 

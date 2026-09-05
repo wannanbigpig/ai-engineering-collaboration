@@ -4,7 +4,7 @@ description: "只读代码审查：按严重程度给出位置、触发条件、
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.2.0
+  version: 1.3.0
 ---
 
 # 只读代码审查

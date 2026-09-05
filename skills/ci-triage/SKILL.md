@@ -4,7 +4,7 @@ description: "远程 CI/构建流水线失败的 provider、日志与代码/环�
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.2.0
+  version: 1.3.0
 ---
 
 # CI/构建流水线失败定位

@@ -4,7 +4,7 @@ description: ".aitasks 任务规划、经验、归档和元数据维护。Use fo
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.2.0
+  version: 1.3.0
 ---
 
 # `.aitasks` 维护

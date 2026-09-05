@@ -4,7 +4,7 @@ description: "跨文件、模块或仓库变更前的调用链、数据流、权
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.2.0
+  version: 1.3.0
 ---
 
 # 变更影响分析
