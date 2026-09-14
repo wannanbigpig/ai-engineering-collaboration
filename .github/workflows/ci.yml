@@ -38,5 +38,5 @@ jobs:
             uvx --from 'skills-ref==0.1.1' agentskills validate "$skill"
           done
 
-      - name: Test project bootstrap script
-        run: python3 -m unittest -v tests/test_bootstrap_project.py
+      - name: Run unit tests
+        run: python3 -m unittest discover -s tests -v

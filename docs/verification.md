@@ -18,13 +18,13 @@ git diff --check
 
 GitHub Actions 运行同一版本一致性检查和 `agentskills validate`。这只能验证文件结构，不代表某个 Harness 已实际发现、加载或执行了 Skill。
 
-## 项目初始化脚本测试
+## 单元测试
 
 ```bash
-python3 -m unittest -v tests/test_bootstrap_project.py
+python3 -m unittest discover -s tests -v
 ```
 
-测试在临时 Git 项目中验证首次安装、重复运行、dry-run、冲突拒绝、`.aitasks` 跟踪选项、Custom Instructions 输出，以及 Gemini 链接的创建、幂等、相同副本保留、冲突拒绝和失败指引。GitHub Actions 也运行该测试。
+测试在临时 Git 项目中验证首次安装、重复运行、dry-run、冲突拒绝、`.aitasks` 跟踪选项、Custom Instructions 输出，以及 Gemini 链接的创建、幂等、相同副本保留、冲突拒绝和失败指引；质量契约测试还会确认可维护性规则仍由对应 Skill 承担。GitHub Actions 运行完整测试发现命令。
 
 ## `.aitasks` CLI smoke test
 
@@ -47,3 +47,16 @@ python3 skills/aitasks-maintenance/scripts/maintain_aitasks.py --project-root /t
 3. `agents/openai.yaml` 只影响 Codex UI，不影响其他 Harness 读取标准 `SKILL.md`。
 
 未在具体 Harness 中实际执行时，应报告“未验证”，不要将目录或静态检查写成运行时验证。
+
+## 可维护性行为评测
+
+[可维护性行为评测场景](../evals/maintainability-scenarios.md)覆盖复用已有实现、影响分析、错误处理、量化证据、避免过度拆分、沿用后端主流风格、无设计稿时沿用现有 UI 和无关修改保护。它们用于验证 Skill 对 Agent 实际行为的影响，不由静态单元测试替代。
+
+在每个目标 Harness 中分别执行：
+
+1. 安装当前版本的全部 Skill，并为每个场景建立新的临时 Git fixture。
+2. 使用场景中的用户请求启动新会话，不额外泄露评分项。
+3. 保存提示、工具调用、最终 diff、验证输出和最终回复，逐项核对“必须观察到”与“不得出现”。
+4. 记录 Harness、模型、Skill 版本、fixture commit 和日期；存在禁止项或缺少工具证据时判定失败。
+
+仓库目前不绑定任一 Harness 的自动运行接口，因此场景定义与质量契约可自动验证，跨 Harness 行为结果仍须实际执行后报告。

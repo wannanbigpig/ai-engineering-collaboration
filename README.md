@@ -2,7 +2,7 @@
 
 一组面向真实工程任务的可组合 Agent Skills。它以 `ai-engineering-collaboration` 为主入口：入口负责发现项目规则、维护非平凡任务记录、按需选择专项阶段，并用新鲜证据完成交付。
 
-当前发布版本：[1.3.0](VERSION)。仓库内全部 10 个 Skill 使用同一版本号。
+当前发布版本：[1.4.0](VERSION)。仓库内全部 10 个 Skill 使用同一版本号。
 
 ## 适合解决什么
 
@@ -48,9 +48,10 @@ python3 scripts/bootstrap_project.py --target /absolute/path/to/your-project
 
 ## 工作方式
 
-1. **先确认约束**：读取与目标路径相关的项目规则和经验；结构、调用链或影响范围任务在 CodeGraph MCP 可用时优先使用它。
+1. **先确认约束**：读取与目标路径相关的项目规则和经验；初次实现代码时从项目工具、多个同类实现、共享组件和设计令牌建立局部风格基线，结构、调用链或影响范围任务在 CodeGraph MCP 可用时优先使用它。
 2. **再推进任务**：目标或验收不清晰时先定界；非平凡任务创建并持续更新 `.aitasks/todo.md`；主入口只选择必要的专项阶段。
 3. **以证据收尾**：代码或范围变化时刷新相关状态；测试或构建失败等情况触发重规划；按风险运行验证并报告未验证项。
+4. **复核结构质量**：在本次变更范围内检查复用、平行实现、错误掩盖、临时代码和过度拆分；函数长度只作为信号，拆分需权衡内聚性与人工导航成本，质量指标只报告工具实际测量的结果。
 
 ## Skill 目录
 
@@ -68,6 +69,7 @@ python3 scripts/bootstrap_project.py --target /absolute/path/to/your-project
 
 ```text
 skills/       # 10 个可独立分发的 Skill
+evals/        # 跨 Harness 的行为评测场景与评分规则
 docs/         # 可重复验证说明
 VERSION       # 唯一发布版本来源
 CHANGELOG.md  # 发布记录
@@ -84,12 +86,12 @@ for skill in skills/*; do
   uvx --from 'skills-ref==0.1.1' agentskills validate "$skill"
 done
 
-python3 -m unittest -v tests/test_bootstrap_project.py
+python3 -m unittest discover -s tests -v
 
 git diff --check
 ```
 
-`.aitasks` CLI 的 smoke test 与外部 Harness 的人工验证边界见 [docs/verification.md](docs/verification.md)。安装任何第三方 Skill 前，应审查其 `SKILL.md`、脚本、引用资源和配置文件；安装不等于授予额外权限。
+`.aitasks` CLI 的 smoke test、[可维护性行为评测](evals/maintainability-scenarios.md)与外部 Harness 的验证边界见 [docs/verification.md](docs/verification.md)。安装任何第三方 Skill 前，应审查其 `SKILL.md`、脚本、引用资源和配置文件；安装不等于授予额外权限。
 
 ## 发布与贡献
 
