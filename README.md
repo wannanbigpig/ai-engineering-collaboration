@@ -1,8 +1,8 @@
 # AI Engineering Collaboration Skills
 
-一组面向真实工程任务的可组合 Agent Skills。它以 `ai-engineering-collaboration` 为主入口：入口负责发现项目规则、维护非平凡任务记录、按需选择专项阶段，并用新鲜证据完成交付。
+一组面向真实工程任务的可组合 Agent Skills。它以 `ai-engineering-collaboration` 为主入口：入口负责发现项目规则、复用必要计划、按证据缺口选择专项阶段，并用当前有效证据完成交付。
 
-当前发布版本：[1.4.0](VERSION)。仓库内全部 10 个 Skill 使用同一版本号。
+当前仓库版本：[1.6.4](VERSION)。仓库内全部 10 个 Skill 使用同一版本号；本地版本号不代表已发布或已更新用户级安装。
 
 ## 适合解决什么
 
@@ -48,10 +48,10 @@ python3 scripts/bootstrap_project.py --target /absolute/path/to/your-project
 
 ## 工作方式
 
-1. **先确认约束**：读取与目标路径相关的项目规则和经验；初次实现代码时从项目工具、多个同类实现、共享组件和设计令牌建立局部风格基线，结构、调用链或影响范围任务在 CodeGraph MCP 可用时优先使用它。
-2. **再推进任务**：目标或验收不清晰时先定界；非平凡任务创建并持续更新 `.aitasks/todo.md`；主入口只选择必要的专项阶段。
-3. **以证据收尾**：代码或范围变化时刷新相关状态；测试或构建失败等情况触发重规划；按风险运行验证并报告未验证项。
-4. **复核结构质量**：在本次变更范围内检查复用、平行实现、错误掩盖、临时代码和过度拆分；函数长度只作为信号，拆分需权衡内聚性与人工导航成本，质量指标只报告工具实际测量的结果。
+1. **先确认约束**：读取与目标路径相关的项目规则和经验；初次实现目标模块时建立局部风格基线并复用已有证据。已知文件和局部关系直接检索，尚不明确的结构或跨模块关系在 CodeGraph MCP 可用时优先使用它。
+2. **再推进任务**：只有无法从事实推导的关键需求才询问，可合并独立问题；明确的修复授权跨阶段继承。非平凡实施必须先有最小计划，已有会话或文件计划可复用；按项目要求或持久化需要维护 `.aitasks/todo.md`，只读任务不写记录、计数或忽略规则。
+3. **以证据收尾**：核对相关状态，只重读变化或缺失的内容；非预期失败才重估，预期失败测试属于正常验证。未变化的代码、依赖、配置和环境对应的通过结果可复用；验证默认使用检查模式，按风险补缺口。
+4. **复核结构质量**：修改前建立一次风格基线，修改后核对一次结构，专项复用证据。函数长度只作为信号，拆分需权衡内聚性与人工导航成本；质量指标只报告实际测量。交付格式遵循用户要求，审查先列问题，简短结果可合并栏目。
 
 ## Skill 目录
 
@@ -60,7 +60,7 @@ python3 scripts/bootstrap_project.py --target /absolute/path/to/your-project
 | 主入口 | `ai-engineering-collaboration` | 统筹规则、任务治理、专项阶段和验证 |
 | 定界与实施 | `requirements-framing`、`plan-execution`、`test-driven-change` | 收敛关键决策、按方案实施、建立测试闭环 |
 | 分析与诊断 | `change-impact-analysis`、`systematic-debugging`、`ci-triage` | 评估影响、定位本地根因、归因远程 CI |
-| 质量 | `code-review`、`verification-gate` | 只读审查和完成/发布前证据检查 |
+| 质量 | `code-review`、`verification-gate` | 代码审查、收到反馈后的事实核验和交付证据检查 |
 | 任务治理 | `aitasks-maintenance` | 维护 todo、经验和归档；带可选 Python 标准库 CLI |
 
 每个 Skill 都可独立安装，相关 `references/`、`assets/` 和可选脚本随其目录分发。主入口的完整协作能力需要所有专项 Skill 同时可被当前 Harness 发现。
@@ -91,7 +91,9 @@ python3 -m unittest discover -s tests -v
 git diff --check
 ```
 
-`.aitasks` CLI 的 smoke test、[可维护性行为评测](evals/maintainability-scenarios.md)与外部 Harness 的验证边界见 [docs/verification.md](docs/verification.md)。安装任何第三方 Skill 前，应审查其 `SKILL.md`、脚本、引用资源和配置文件；安装不等于授予额外权限。
+`.aitasks` CLI 的 smoke test、[可维护性行为评测](evals/maintainability-scenarios.md)、[工作流边界评测](evals/workflow-boundaries.md)和[成对行为运行器](evals/behavior-evaluation.md)的验证边界见 [docs/verification.md](docs/verification.md)。安装任何第三方 Skill 前，应审查其 `SKILL.md`、脚本、引用资源和配置文件；安装不等于授予额外权限。
+
+本次审查风险与检索范围收敛见 [1.6.4 验收结果](evals/reports/1.6.4.md)；查询和取证改进见 [1.6.3](evals/reports/1.6.3.md)，更早记录见 [1.6.2](evals/reports/1.6.2.md)、[1.6.1](evals/reports/1.6.1.md) 和 [1.6.0](evals/reports/1.6.0.md)。
 
 ## 发布与贡献
 

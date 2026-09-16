@@ -1,4 +1,4 @@
 interface:
   display_name: "变更影响分析"
-  short_description: "实施前评估变更影响范围"
-  default_prompt: "使用 $change-impact-analysis 分析当前变更的范围、调用链和风险。"
+  short_description: "分析尚未明确的共享行为与契约影响，不因跨文件自动触发"
+  default_prompt: "使用 $change-impact-analysis 分析尚未明确的共享行为、数据流与契约影响。"

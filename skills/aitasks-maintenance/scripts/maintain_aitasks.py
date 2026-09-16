@@ -746,12 +746,17 @@ def command_mark_used(args: argparse.Namespace) -> int:
 def command_find_lessons(args: argparse.Namespace) -> int:
     """Print matching lesson records without modifying project files."""
     lesson_path, _, _, _ = project_files(args.project_root)
+    lesson_file = load_record_file(lesson_path, "lesson")
     query = args.query.casefold()
     matches = [
         record
-        for record in load_record_file(lesson_path, "lesson").records
+        for record in searchable_lesson_records(lesson_file)
         if query in record.title.casefold() or query in record.raw.casefold()
     ][: args.limit]
+    if args.json_output:
+        print(json.dumps({"matches": [lesson_json(lesson_file, record) for record in matches]},
+                         ensure_ascii=False, indent=2))
+        return 0
     if not matches:
         print("No lessons matched.")
         return 0
@@ -770,6 +775,114 @@ def command_find_lessons(args: argparse.Namespace) -> int:
                 )
             )
     return 0
+
+
+def lesson_json(record_file: RecordFile, record: Record) -> dict:
+    """Return one record with its own metadata and original source coordinates."""
+    raw_count = record.fields.get("use_count")
+    use_count = None
+    count_status = "missing"
+    if raw_count is not None:
+        try:
+            use_count = int(raw_count)
+            if use_count < 0:
+                raise ValueError("negative use_count")
+            count_status = "recorded"
+        except ValueError:
+            use_count = None
+            count_status = "invalid"
+    text = record_file.text
+    heading = HEADING_PATTERN.search(text, record.start, record.end)
+    content = record.raw
+    marker = MARKER_PATTERN.match(content)
+    if marker:
+        content = content[marker.end():].lstrip("\r\n")
+    content_end = record.start + len(text[record.start:record.end].rstrip())
+    return {
+        "title": record.title,
+        "content": content.rstrip(),
+        "metadata": dict(record.fields) if record.fields else None,
+        "use_count": use_count,
+        "use_count_status": count_status,
+        "source": {
+            "path": str(record_file.path.resolve()),
+            "start_line": text.count("\n", 0, record.start) + 1,
+            "end_line": text.count("\n", 0, content_end) + 1,
+            "title_line": text.count("\n", 0, heading.start()) + 1 if heading else None,
+        },
+    }
+
+
+def searchable_lesson_records(record_file: RecordFile) -> list[Record]:
+    """Include headed legacy sections for search only, never for maintenance.
+
+    Metadata records keep their existing boundaries and output. Uncovered
+    sections become read-only records with empty fields; nested headings stay
+    in their parent section so one lesson cannot appear multiple times.
+    """
+    text = record_file.text
+    headings: list[tuple[int, int]] = []
+    fence = ""
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        fence_match = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
+        if fence_match:
+            delimiter = fence_match.group(1)
+            if not fence:
+                fence = delimiter
+            elif (
+                delimiter[0] == fence[0]
+                and len(delimiter) >= len(fence)
+                and not line[fence_match.end() :].strip()
+            ):
+                fence = ""
+        elif not fence and HEADING_PATTERN.match(line):
+            headings.append((offset, len(line) - len(line.lstrip("#"))))
+        offset += len(line)
+
+    # A sole leading H1 with child headings is the document title.
+    if (
+        len(headings) > 1
+        and headings[0][1] == 1
+        and sum(level == 1 for _, level in headings) == 1
+    ):
+        headings = headings[1:]
+
+    records = list(record_file.records)
+    cursor = 0
+    gaps: list[tuple[int, int]] = []
+    for record in record_file.records:
+        gaps.append((cursor, record.start))
+        cursor = record.end
+    gaps.append((cursor, len(text)))
+
+    for start, end in gaps:
+        section_start: int | None = None
+        section_level = 0
+        for heading_start, level in headings:
+            if not start <= heading_start < end:
+                continue
+            if section_start is not None and level > section_level:
+                continue
+            if section_start is not None:
+                records.append(
+                    Record(
+                        "lesson",
+                        MARKER_PATTERN.sub("", text[section_start:heading_start]),
+                        {},
+                        section_start,
+                        heading_start,
+                    )
+                )
+            section_start, section_level = heading_start, level
+        if section_start is not None:
+            records.append(
+                Record(
+                    "lesson", MARKER_PATTERN.sub("", text[section_start:end]),
+                    {}, section_start, end,
+                )
+            )
+    return sorted(records, key=lambda record: record.start)
 
 
 def command_set_todo_status(args: argparse.Namespace) -> int:
@@ -883,10 +996,15 @@ def parse_args() -> argparse.Namespace:
     find_parser = commands.add_parser(
         "find-lessons", help="Find lessons by title or body text without editing."
     )
-    find_parser.add_argument("--query", required=True, help="Case-insensitive text.")
+    find_parser.add_argument("--query", required=True, help="One case-insensitive literal substring, not a regex or keyword list.")
     find_parser.add_argument("--limit", type=int, default=10)
-    find_parser.add_argument(
+    find_output = find_parser.add_mutually_exclusive_group()
+    find_output.add_argument(
         "--include-content", action="store_true", help="Print matching record bodies."
+    )
+    find_output.add_argument(
+        "--json", dest="json_output", action="store_true",
+        help="Return complete records with owned metadata, nullable use_count and source line numbers."
     )
     find_parser.set_defaults(handler=command_find_lessons)
 

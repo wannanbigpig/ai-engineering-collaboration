@@ -1,4 +1,4 @@
 interface:
   display_name: "测试先行变更"
-  short_description: "以测试驱动功能与 Bug 变更"
-  default_prompt: "使用 $test-driven-change 以测试先行方式完成当前功能或 Bug 变更。"
+  short_description: "为行为变更建立必要回归保护，低风险修改不强制测试先行"
+  default_prompt: "使用 $test-driven-change 为当前行为变更建立必要回归保护，优先复用已有测试。"

@@ -1,4 +1,4 @@
 interface:
   display_name: "验证关卡"
-  short_description: "在完成或发布前收集验证证据"
-  default_prompt: "使用 $verification-gate 核对当前完成或发布声明所需的验证证据。"
+  short_description: "核对交付或发布证据缺口，复用有效结果并按风险补验证"
+  default_prompt: "使用 $verification-gate 复用现有有效证据，仅补足当前交付声明的验证缺口。"
