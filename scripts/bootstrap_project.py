@@ -14,14 +14,19 @@ from pathlib import Path
 
 AGENTS_BEGIN = "<!-- ai-engineering-collaboration:begin -->"
 AGENTS_END = "<!-- ai-engineering-collaboration:end -->"
-GEMINI_LINK_TARGET = "../../.agents/skills"
+COMPATIBILITY_LINK_TARGET = "../../.agents/skills"
+COMPATIBILITY_SKILL_DIRS = (
+    ("Gemini", ".gemini"),
+    ("Claude Code", ".claude"),
+    ("ZCode", ".zcode"),
+)
 MANAGED_AGENTS_SECTION = f"""{AGENTS_BEGIN}
 # AI Engineering Collaboration
 
 - Read and follow applicable `AGENTS.md`, `AGENTS.override.md`, and `CLAUDE.md`; closer project rules take precedence.
-- Investigate before editing, make the smallest root-cause change, and preserve unrelated work.
-- Run appropriate validation after changes; do not claim unverified work is complete.
-- For non-trivial engineering work, use `ai-engineering-collaboration` and let it select specialist stages as needed.
+- Inspect the implementation and constraints relevant to the task before editing; for bugs, make the smallest root-cause fix and preserve unrelated work.
+- When behavior or a deliverable changes, run the smallest validation that covers the risk; reuse fresh results when inputs are unchanged, and do not run unrelated tests for documentation-only changes.
+- Use `ai-engineering-collaboration` only when the task needs coordination across multiple specialist stages or the user explicitly requests it; handle a single clear workflow directly or with its matching specialist skill.
 {AGENTS_END}
 """
 
@@ -29,10 +34,10 @@ CUSTOM_INSTRUCTIONS = """# Engineering defaults
 
 - 使用中文回复；代码、命令、文件名、错误日志和 API 名称保持原文。
 - 修改前读取并遵守适用的 `AGENTS.md`、`CLAUDE.md`；项目规则和更近路径规则优先。
-- 先调查，再做最小范围的根因修复；不得改动或覆盖无关内容。
-- 修改后执行适当验证；未验证不得宣称完成。
+- 修改前核对与任务直接相关的实现和约束；Bug 在根因明确后做最小修复，不得改动或覆盖无关内容。
+- 行为或交付物发生变化后，运行覆盖风险的最小验证；输入未变的新鲜结果可复用，纯文档或注释修改不默认运行无关测试，未验证不得宣称完成。
 - 代码变更任务完成时，仅说明：做了什么、关键修改、根因、验证方式、遗留风险或未验证项。
-- 对非平凡工程任务，使用 `ai-engineering-collaboration` Skill。
+- 仅当任务需要跨多个专项阶段统筹，或用户明确指定时，使用 `ai-engineering-collaboration`；单一明确任务直接处理或使用对应专项 Skill。
 """
 
 
@@ -208,14 +213,10 @@ def copy_skills(install_sources: list[Path], destination_root: Path) -> None:
         shutil.copytree(source, destination_root / source.name)
 
 
-def gemini_link_plan(
-    sources: list[Path], destination_root: Path
+def compatibility_link_plan(
+    sources: list[Path], destination_root: Path, harness: str
 ) -> tuple[list[Path], list[Path], list[str]]:
-    """Plan symlinks that expose the installed skills to Gemini CLI.
-
-    Gemini CLI discovers skills in ~/.gemini/skills and <project>/.gemini/skills
-    and never reads .agents/skills, so each skill needs a link there.
-    """
+    """Plan links from a harness-specific discovery directory to .agents/skills."""
     if destination_root.exists() and not destination_root.is_dir():
         raise BootstrapError(f"Expected a directory or no path at: {destination_root}")
 
@@ -224,34 +225,36 @@ def gemini_link_plan(
     conflicts: list[str] = []
     for source in sources:
         link = destination_root / source.name
-        expected = destination_root / GEMINI_LINK_TARGET / source.name
+        expected = destination_root / COMPATIBILITY_LINK_TARGET / source.name
         if link.is_symlink():
             if link.resolve() == expected.resolve():
                 current_links.append(link)
             else:
                 conflicts.append(
-                    f"{link} is not a managed Gemini link (points to {link.readlink()})"
+                    f"{link} is not a managed {harness} link (points to {link.readlink()})"
                 )
         elif link.exists():
             if link.is_dir() and file_manifest(source) == file_manifest(link):
                 current_links.append(link)
             else:
                 conflicts.append(
-                    f"{link} exists but is not a managed Gemini link or an identical Skill copy"
+                    f"{link} exists but is not a managed {harness} link or an identical Skill copy"
                 )
         else:
             link_sources.append(link)
     return link_sources, current_links, conflicts
 
 
-def create_gemini_links(links: list[Path]) -> None:
+def create_compatibility_links(links: list[Path], harness: str) -> None:
     for link in links:
         link.parent.mkdir(parents=True, exist_ok=True)
         try:
-            link.symlink_to(f"{GEMINI_LINK_TARGET}/{link.name}", target_is_directory=True)
+            link.symlink_to(
+                f"{COMPATIBILITY_LINK_TARGET}/{link.name}", target_is_directory=True
+            )
         except OSError as error:
             raise BootstrapError(
-                f"Failed to create Gemini link {link}: {error}. "
+                f"Failed to create {harness} link {link}: {error}. "
                 "The .agents/skills copies are intact; create this link manually "
                 "or rerun on a filesystem that supports symbolic links."
             ) from error
@@ -271,9 +274,14 @@ def install_project(target: Path, dry_run: bool, track_aitasks: bool) -> int:
         sources, destination_root
     )
 
-    gemini_root = target / ".gemini" / "skills"
-    gemini_links, gemini_current, gemini_conflicts = gemini_link_plan(sources, gemini_root)
-    conflicts = conflicts + gemini_conflicts
+    compatibility_plans = []
+    for harness, directory in COMPATIBILITY_SKILL_DIRS:
+        link_root = target / directory / "skills"
+        links, current, link_conflicts = compatibility_link_plan(
+            sources, link_root, harness
+        )
+        compatibility_plans.append((harness, link_root, links, current))
+        conflicts.extend(link_conflicts)
 
     agents_path = target / "AGENTS.md"
     existing_agents = read_regular_file(agents_path)
@@ -286,10 +294,11 @@ def install_project(target: Path, dry_run: bool, track_aitasks: bool) -> int:
 
     planned: list[str] = []
     planned.extend(f"install {source.name}" for source in install_sources)
-    planned.extend(
-        f"link {link.relative_to(target)} -> {GEMINI_LINK_TARGET}/{link.name}"
-        for link in gemini_links
-    )
+    for _, _, links, _ in compatibility_plans:
+        planned.extend(
+            f"link {link.relative_to(target)} -> {COMPATIBILITY_LINK_TARGET}/{link.name}"
+            for link in links
+        )
     if rendered_agents != existing_agents:
         planned.append(f"update {agents_path.relative_to(target)}")
     if rendered_gitignore is not None:
@@ -304,7 +313,8 @@ def install_project(target: Path, dry_run: bool, track_aitasks: bool) -> int:
         return 0
 
     copy_skills(install_sources, destination_root)
-    create_gemini_links(gemini_links)
+    for harness, _, links, _ in compatibility_plans:
+        create_compatibility_links(links, harness)
     if rendered_agents != existing_agents:
         atomic_write(agents_path, rendered_agents)
     if rendered_gitignore is not None:
@@ -313,10 +323,11 @@ def install_project(target: Path, dry_run: bool, track_aitasks: bool) -> int:
     print(
         f"Skills: {len(install_sources)} installed, {len(current_sources)} already current."
     )
-    print(
-        f"Gemini: {len(gemini_links)} linked, {len(gemini_current)} already current "
-        f"in {gemini_root.relative_to(target)}."
-    )
+    for harness, link_root, links, current in compatibility_plans:
+        print(
+            f"{harness}: {len(links)} linked, {len(current)} already current "
+            f"in {link_root.relative_to(target)}."
+        )
     if rendered_agents != existing_agents:
         print("AGENTS.md: managed collaboration section installed.")
     else:
@@ -339,34 +350,45 @@ def install_user(dry_run: bool) -> int:
         sources, destination_root
     )
 
-    gemini_root = Path.home() / ".gemini" / "skills"
-    gemini_links, gemini_current, gemini_conflicts = gemini_link_plan(sources, gemini_root)
-    if conflicts or gemini_conflicts:
-        return report_skill_conflicts(conflicts + gemini_conflicts)
+    compatibility_plans = []
+    for harness, directory in COMPATIBILITY_SKILL_DIRS:
+        link_root = Path.home() / directory / "skills"
+        links, current, link_conflicts = compatibility_link_plan(
+            sources, link_root, harness
+        )
+        compatibility_plans.append((harness, link_root, links, current))
+        conflicts.extend(link_conflicts)
+    if conflicts:
+        return report_skill_conflicts(conflicts)
 
     if dry_run:
         print("Dry run:")
         for source in install_sources:
             print(f"- install {source.name}")
-        for link in gemini_links:
-            print(f"- link {link} -> {GEMINI_LINK_TARGET}/{link.name}")
-        if not install_sources and not gemini_links:
+        for _, _, links, _ in compatibility_plans:
+            for link in links:
+                print(f"- link {link} -> {COMPATIBILITY_LINK_TARGET}/{link.name}")
+        if not install_sources and not any(plan[2] for plan in compatibility_plans):
             print("- no changes required")
         print(f"- user Skill directory: {destination_root}")
-        print(f"- Gemini link directory: {gemini_root}")
+        for harness, link_root, _, _ in compatibility_plans:
+            print(f"- {harness} link directory: {link_root}")
         return 0
 
     copy_skills(install_sources, destination_root)
-    create_gemini_links(gemini_links)
+    for harness, _, links, _ in compatibility_plans:
+        create_compatibility_links(links, harness)
     print(
         f"User Skills: {len(install_sources)} installed, "
         f"{len(current_sources)} already current."
     )
-    print(
-        f"Gemini Skills: {len(gemini_links)} linked, "
-        f"{len(gemini_current)} already current."
-    )
-    print(f"Installed only in: {destination_root} and {gemini_root}")
+    for harness, _, links, current in compatibility_plans:
+        print(
+            f"{harness} Skills: {len(links)} linked, "
+            f"{len(current)} already current."
+        )
+    link_roots = ", ".join(str(plan[1]) for plan in compatibility_plans)
+    print(f"Installed only in: {destination_root}; compatibility links in: {link_roots}")
     print("No AGENTS.md, .gitignore, or project files were changed.")
     print("Paste global Custom Instructions manually with --print-custom-instructions.")
     return 0

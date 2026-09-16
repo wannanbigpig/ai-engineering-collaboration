@@ -83,6 +83,24 @@ class BootstrapProjectTest(unittest.TestCase):
         self.assertIn("# Engineering defaults", result.stdout)
         self.assertIn("使用中文回复", result.stdout)
 
+    def test_generated_guidance_scopes_orchestration_and_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            target = Path(temporary_directory) / "project"
+            target.mkdir()
+
+            installed = self.run_script("--target", str(target))
+            custom = self.run_script("--print-custom-instructions")
+
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            self.assertEqual(custom.returncode, 0, custom.stderr)
+            agents = (target / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertIn("needs coordination across multiple specialist stages", agents)
+            self.assertNotIn("For non-trivial engineering work", agents)
+            self.assertIn("任务需要跨多个专项阶段统筹", custom.stdout)
+            self.assertNotIn("对非平凡工程任务", custom.stdout)
+            self.assertIn("覆盖风险的最小验证", custom.stdout)
+            self.assertIn("纯文档或注释修改不默认运行无关测试", custom.stdout)
+
     def test_user_scope_installs_only_skills_under_home(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             home = Path(temporary_directory) / "home"
@@ -103,30 +121,41 @@ class BootstrapProjectTest(unittest.TestCase):
                 second.stdout,
             )
 
-    def test_project_target_links_skills_for_gemini(self) -> None:
+    def test_project_target_links_skills_for_supported_harnesses(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             target = Path(temporary_directory) / "project"
             target.mkdir()
 
             first = self.run_script("--target", str(target))
             self.assertEqual(first.returncode, 0, first.stderr)
-            gemini_skills = target / ".gemini" / "skills"
-            self.assertEqual(sorted(path.name for path in gemini_skills.iterdir()), SOURCE_SKILLS)
-            for name in SOURCE_SKILLS:
-                link = gemini_skills / name
-                self.assertTrue(link.is_symlink(), link)
-                self.assertEqual(
-                    link.resolve(), (target / ".agents" / "skills" / name).resolve()
-                )
-            self.assertIn(
-                f"Gemini: {len(SOURCE_SKILLS)} linked, 0 already current", first.stdout
-            )
+            for harness, directory in (
+                ("Gemini", ".gemini"),
+                ("Claude Code", ".claude"),
+                ("ZCode", ".zcode"),
+            ):
+                with self.subTest(harness=harness):
+                    harness_skills = target / directory / "skills"
+                    self.assertEqual(
+                        sorted(path.name for path in harness_skills.iterdir()), SOURCE_SKILLS
+                    )
+                    for name in SOURCE_SKILLS:
+                        link = harness_skills / name
+                        self.assertTrue(link.is_symlink(), link)
+                        self.assertEqual(
+                            link.resolve(), (target / ".agents" / "skills" / name).resolve()
+                        )
+                    self.assertIn(
+                        f"{harness}: {len(SOURCE_SKILLS)} linked, 0 already current",
+                        first.stdout,
+                    )
 
             second = self.run_script("--target", str(target))
             self.assertEqual(second.returncode, 0, second.stderr)
-            self.assertIn(
-                f"Gemini: 0 linked, {len(SOURCE_SKILLS)} already current", second.stdout
-            )
+            for harness in ("Gemini", "Claude Code", "ZCode"):
+                self.assertIn(
+                    f"{harness}: 0 linked, {len(SOURCE_SKILLS)} already current",
+                    second.stdout,
+                )
 
     def test_project_dry_run_reports_gemini_links_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -136,10 +165,12 @@ class BootstrapProjectTest(unittest.TestCase):
             result = self.run_script("--target", str(target), "--dry-run")
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn(
-                "link .gemini/skills/ai-engineering-collaboration", result.stdout
-            )
+            self.assertIn("link .gemini/skills/ai-engineering-collaboration", result.stdout)
+            self.assertIn("link .claude/skills/ai-engineering-collaboration", result.stdout)
+            self.assertIn("link .zcode/skills/ai-engineering-collaboration", result.stdout)
             self.assertFalse((target / ".gemini").exists())
+            self.assertFalse((target / ".claude").exists())
+            self.assertFalse((target / ".zcode").exists())
             self.assertFalse((target / ".agents").exists())
 
     def test_project_conflicting_gemini_entry_aborts_before_writing(self) -> None:
@@ -174,7 +205,7 @@ class BootstrapProjectTest(unittest.TestCase):
             self.assertTrue(existing_copy.is_dir())
             self.assertIn("Gemini: 9 linked, 1 already current", result.stdout)
 
-    def test_user_scope_links_skills_for_gemini_under_home(self) -> None:
+    def test_user_scope_links_skills_for_supported_harnesses_under_home(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             home = Path(temporary_directory) / "home"
             home.mkdir()
@@ -182,20 +213,27 @@ class BootstrapProjectTest(unittest.TestCase):
 
             first = self.run_script("--scope", "user", environment=environment)
             self.assertEqual(first.returncode, 0, first.stderr)
-            for name in SOURCE_SKILLS:
-                link = home / ".gemini" / "skills" / name
-                self.assertTrue(link.is_symlink(), link)
-                self.assertEqual(
-                    link.resolve(), (home / ".agents" / "skills" / name).resolve()
-                )
+            for harness, directory in (
+                ("Gemini", ".gemini"),
+                ("Claude Code", ".claude"),
+                ("ZCode", ".zcode"),
+            ):
+                with self.subTest(harness=harness):
+                    for name in SOURCE_SKILLS:
+                        link = home / directory / "skills" / name
+                        self.assertTrue(link.is_symlink(), link)
+                        self.assertEqual(
+                            link.resolve(), (home / ".agents" / "skills" / name).resolve()
+                        )
             self.assertFalse((home / "AGENTS.md").exists())
 
             second = self.run_script("--scope", "user", environment=environment)
             self.assertEqual(second.returncode, 0, second.stderr)
-            self.assertIn(
-                f"Gemini Skills: 0 linked, {len(SOURCE_SKILLS)} already current.",
-                second.stdout,
-            )
+            for harness in ("Gemini", "Claude Code", "ZCode"):
+                self.assertIn(
+                    f"{harness} Skills: 0 linked, {len(SOURCE_SKILLS)} already current.",
+                    second.stdout,
+                )
 
     def test_user_scope_dry_run_reports_gemini_links_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -212,8 +250,20 @@ class BootstrapProjectTest(unittest.TestCase):
                 f"link {home / '.gemini' / 'skills' / 'ai-engineering-collaboration'}",
                 result.stdout,
             )
+            self.assertIn(
+                f"link {home / '.claude' / 'skills' / 'ai-engineering-collaboration'}",
+                result.stdout,
+            )
+            self.assertIn(
+                f"link {home / '.zcode' / 'skills' / 'ai-engineering-collaboration'}",
+                result.stdout,
+            )
             self.assertIn("Gemini link directory:", result.stdout)
+            self.assertIn("Claude Code link directory:", result.stdout)
+            self.assertIn("ZCode link directory:", result.stdout)
             self.assertFalse((home / ".gemini").exists())
+            self.assertFalse((home / ".claude").exists())
+            self.assertFalse((home / ".zcode").exists())
             self.assertFalse((home / ".agents").exists())
 
     def test_gemini_link_failure_reports_remedy_and_exit_code(self) -> None:

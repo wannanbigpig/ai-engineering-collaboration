@@ -1,4 +1,4 @@
 interface:
   display_name: "方案实施"
-  short_description: "按可验证切片实施已确认方案"
-  default_prompt: "使用 $plan-execution 按当前代码和已确认方案实施可验证切片。"
+  short_description: "按可验证切片实施用户要求执行的现有方案"
+  default_prompt: "使用 $plan-execution 按当前代码实施用户已要求执行的现有方案或任务清单。"

@@ -1,10 +1,10 @@
 ---
 name: change-impact-analysis
-description: "在共享行为、跨模块数据流或契约影响尚未明确时分析变更范围；也用于明确要求的影响分析，不因跨文件自动触发。Assess unresolved behavioral and contract impact before changes."
+description: "分析尚未明确的共享行为、跨模块数据流或契约影响；明确要求影响分析时也使用。"
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.6.4
+  version: 1.7.0
 ---
 
 # 变更影响分析

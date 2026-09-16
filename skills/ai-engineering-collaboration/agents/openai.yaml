@@ -1,4 +1,4 @@
 interface:
   display_name: "AI 工程协作"
-  short_description: "统筹非平凡工程任务，按需选择专项并复用当前有效证据"
-  default_prompt: "使用 $ai-engineering-collaboration 统筹当前工程任务，在已有授权内按需选择专项并复用有效证据。"
+  short_description: "统筹需要跨多个专项阶段的工程任务"
+  default_prompt: "使用 $ai-engineering-collaboration 统筹当前跨阶段工程任务，在已有授权内只选择必要专项并复用有效证据。"

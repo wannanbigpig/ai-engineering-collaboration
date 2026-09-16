@@ -1,10 +1,10 @@
 ---
 name: requirements-framing
-description: "澄清无法从现有证据推导、且会实质改变交付的关键需求决策；也用于明确要求的需求拆解或方案比较。Resolve material requirement decisions that evidence alone cannot settle."
+description: "澄清无法从现有证据推导且会改变交付的关键决策；明确要求需求拆解或方案比较时也使用。"
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.6.4
+  version: 1.7.0
 ---
 
 # 需求定界

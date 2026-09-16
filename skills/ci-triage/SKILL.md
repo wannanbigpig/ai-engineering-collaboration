@@ -1,10 +1,10 @@
 ---
 name: ci-triage
-description: "定位远程 CI 流水线失败的根因；本地问题仅在根因未明时使用 systematic-debugging，已获修复授权时继续最小修复。Triage remote CI failures and continue fixes within existing authorization."
+description: "定位远程 CI 流水线失败；仅在根因未明时转本地调试。"
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.6.4
+  version: 1.7.0
 ---
 
 # CI/构建流水线失败定位

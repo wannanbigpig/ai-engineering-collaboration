@@ -1,10 +1,10 @@
 ---
 name: verification-gate
-description: "用于明确的验证请求，或高风险交付、发布前尚缺证据的检查；普通交付复用已有充分证据，不自动重跑全部检查。Verify evidence gaps for requested checks or high-risk delivery."
+description: "补足明确验证请求或高风险交付、发布前的证据缺口；普通交付不重复验证。"
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.6.4
+  version: 1.7.0
 ---
 
 # 验证关卡

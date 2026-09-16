@@ -15,7 +15,7 @@ SKILL = ROOT / "skills/aitasks-maintenance"
 
 class SkillCommandExampleTest(unittest.TestCase):
     def test_documented_read_only_commands_work_with_space_containing_paths(self) -> None:
-        text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        text = (SKILL / "references/maintenance.md").read_text(encoding="utf-8")
         block = text.split("```bash\n", 1)[1].split("```", 1)[0]
         # Execute only the documented read-only operations in a temporary project.
         commands = [

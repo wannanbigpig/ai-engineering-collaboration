@@ -24,7 +24,7 @@ GitHub Actions 运行同一版本一致性检查和 `agentskills validate`。这
 python3 -m unittest discover -s tests -v
 ```
 
-测试在临时 Git 项目中验证首次安装、重复运行、dry-run、冲突拒绝、`.aitasks` 跟踪选项、Custom Instructions 输出，以及 Gemini 链接的创建、幂等、相同副本保留、冲突拒绝和失败指引；经验维护测试覆盖无元数据/混合经验检索、JSON正文与元数据归属/计数状态/源行号、只读检索与维护写入隔离，以及无到期记录时仅更新检查状态；命令示例测试在可用的 bash/zsh 中执行含空格路径的只读命令。质量契约测试仅检查历史规则的静态线索，不能证明指令之间没有冲突或真实行为正确。GitHub Actions 运行完整测试发现命令。
+测试在临时 Git 项目中验证首次安装、重复运行、dry-run、冲突拒绝、`.aitasks` 跟踪选项、Custom Instructions 输出，以及 Claude Code、Gemini、ZCode 兼容链接的创建与幂等、相同副本保留、冲突拒绝和失败指引；经验维护测试覆盖无元数据/混合经验检索、JSON正文与元数据归属/计数状态/源行号、只读检索与维护写入隔离，以及无到期记录时仅更新检查状态；命令示例测试在可用的 bash/zsh 中执行含空格路径的只读命令。质量契约测试仅检查历史规则的静态线索，不能证明指令之间没有冲突或真实行为正确。GitHub Actions 运行完整测试发现命令。
 
 ## `.aitasks` CLI smoke test
 

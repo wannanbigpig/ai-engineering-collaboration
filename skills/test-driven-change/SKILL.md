@@ -1,10 +1,10 @@
 ---
 name: test-driven-change
-description: "为需要行为回归保护的功能或 Bug 变更选择测试策略；复用现有测试，低风险修改不强制 TDD。Choose test-first coverage when behavior changes need regression protection."
+description: "为有回归风险的功能或 Bug 变更选择测试策略；低风险修改不强制使用。"
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.6.4
+  version: 1.7.0
 ---
 
 # 测试先行的变更

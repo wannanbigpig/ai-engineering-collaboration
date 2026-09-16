@@ -1,15 +1,15 @@
 ---
 name: systematic-debugging
-description: "排查根因未明的本地 Bug、非预期测试或构建失败、性能与集成异常；已知根因直接修复，远程流水线先用 ci-triage。Diagnose unresolved local failures with evidence and minimal experiments."
+description: "排查根因未明的本地 Bug、测试或构建失败、性能与集成异常。"
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.6.4
+  version: 1.7.0
 ---
 
 # 系统化调试
 
-针对本地 Bug、测试/构建失败、性能异常、集成问题和非预期行为排查根因；证据不足时不跳步。
+针对本地 Bug、测试/构建失败、性能异常、集成问题和非预期行为排查根因。以下步骤按证据缺口选择，不是固定流水线；当前证据已确认根因时直接进入最小修复与复验。
 
 ## 流程
 
