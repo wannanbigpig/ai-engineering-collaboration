@@ -4,7 +4,7 @@ description: "排查根因未明的本地 Bug、测试或构建失败、性能�
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.0
+  version: 1.7.1
 ---
 
 # 系统化调试

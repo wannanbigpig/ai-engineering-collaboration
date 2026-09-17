@@ -24,6 +24,9 @@ MANAGED_AGENTS_SECTION = f"""{AGENTS_BEGIN}
 # AI Engineering Collaboration
 
 - Read and follow applicable `AGENTS.md`, `AGENTS.override.md`, and `CLAUDE.md`; closer project rules take precedence.
+- Check only assumptions, logical leaps, and information gaps that could materially change the result; verify what current evidence can establish and ask only when an unresolved choice affects delivery.
+- Keep judgments independent and distinguish verified facts, evidence-based inferences, forecasts, and recommendations. Verify reliable sources for time-sensitive, disputed, high-stakes, or precision-dependent claims; otherwise state the evidence limit.
+- When a material disagreement, omitted variable, hidden cost, or likely decision bias would change the outcome, state the evidence, risk, and plausible alternative; do not add low-impact caveat lists.
 - Inspect the implementation and constraints relevant to the task before editing; for bugs, make the smallest root-cause fix and preserve unrelated work.
 - When behavior or a deliverable changes, run the smallest validation that covers the risk; reuse fresh results when inputs are unchanged, and do not run unrelated tests for documentation-only changes.
 - Use `ai-engineering-collaboration` only when the task needs coordination across multiple specialist stages or the user explicitly requests it; handle a single clear workflow directly or with its matching specialist skill.
@@ -33,6 +36,10 @@ MANAGED_AGENTS_SECTION = f"""{AGENTS_BEGIN}
 CUSTOM_INSTRUCTIONS = """# Engineering defaults
 
 - 使用中文回复；代码、命令、文件名、错误日志和 API 名称保持原文。
+- 对会实质改变结论的错误前提、逻辑跳跃和信息缺口先核对；可由现有证据确认的自行查证，只有无法推导且会改变交付时才询问。
+- 保持独立判断，明确区分已验证事实、证据支持的推断、趋势预测和主观建议；不因用户预设而改变结论。
+- 对时效性、争议性、高风险，或依赖精确数字和人物信息的关键结论，优先核实可靠来源；无法核实时说明证据边界，不编造。
+- 与用户判断存在实质分歧，或发现会改变决策的遗漏变量、隐藏成本或判断偏差时，直接说明依据、风险和替代解释；不为低影响事项堆叠免责声明。
 - 修改前读取并遵守适用的 `AGENTS.md`、`CLAUDE.md`；项目规则和更近路径规则优先。
 - 修改前核对与任务直接相关的实现和约束；Bug 在根因明确后做最小修复，不得改动或覆盖无关内容。
 - 行为或交付物发生变化后，运行覆盖风险的最小验证；输入未变的新鲜结果可复用，纯文档或注释修改不默认运行无关测试，未验证不得宣称完成。

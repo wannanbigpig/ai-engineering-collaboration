@@ -4,7 +4,7 @@ description: "统筹确需跨多个专项阶段的工程任务；用户明确指
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.0
+  version: 1.7.1
 ---
 
 # AI 工程协作

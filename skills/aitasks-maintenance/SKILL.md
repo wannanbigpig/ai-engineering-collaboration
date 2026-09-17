@@ -4,7 +4,7 @@ description: "写入或维护 .aitasks 计划、经验、计数与归档元数�
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.0
+  version: 1.7.1
 ---
 
 # `.aitasks` 维护

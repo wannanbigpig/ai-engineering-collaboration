@@ -4,7 +4,7 @@ description: "执行用户已要求实施的现有方案、Spec 或任务清单�
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.0
+  version: 1.7.1
 ---
 
 # 方案实施
