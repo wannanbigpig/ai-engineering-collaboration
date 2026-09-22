@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+## 1.7.2 - 2026-09-22
+
+- `--print-custom-instructions` 输出精简的 CodeGraph 条件规则；与 `--scope user` 同时使用时打印后继续安装 Skills。
 - 项目安装在需要更新配置时拒绝悬空的 `AGENTS.md` 和 `.gitignore` 链接，避免覆盖用户配置入口；`--track-aitasks` 不检查或改写 `.gitignore`。
 - 项目安装仅在 `.gitignore` 历史差异中确实删除过 `.aitasks` 忽略规则时保留用户选择，不再将提交说明或相似路径误判为删除。
 - 旧经验查询保留代码围栏中的元数据示例，文本与 JSON 输出不再丢失正文。

@@ -148,6 +148,9 @@ class BootstrapProjectTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("# Engineering defaults", result.stdout)
         self.assertIn("使用中文回复", result.stdout)
+        self.assertIn("`.codegraph/`", result.stdout)
+        self.assertIn("`codegraph status`", result.stdout)
+        self.assertIn("不自动执行 `codegraph init`", result.stdout)
 
         documentation = (REPOSITORY_ROOT / "docs" / "project-bootstrap.md").read_text(
             encoding="utf-8"
@@ -155,6 +158,39 @@ class BootstrapProjectTest(unittest.TestCase):
         custom_section = documentation.split("## Codex Custom Instructions", 1)[1]
         documented_instructions = custom_section.split("```md\n", 1)[1].split("\n```", 1)[0]
         self.assertEqual(result.stdout.strip(), documented_instructions.strip())
+
+    def test_prints_custom_instructions_then_installs_user_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            home = Path(temporary_directory) / "home"
+            home.mkdir()
+            environment = dict(os.environ, HOME=str(home))
+
+            result = self.run_script(
+                "--scope", "user", "--print-custom-instructions", environment=environment
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("# Engineering defaults", result.stdout)
+            self.assertIn(f"User Skills: {len(SOURCE_SKILLS)} installed", result.stdout)
+            self.assertEqual(
+                sorted(path.name for path in (home / ".agents" / "skills").iterdir()),
+                SOURCE_SKILLS,
+            )
+            self.assertFalse((home / "AGENTS.md").exists())
+
+    def test_prints_custom_instructions_then_installs_project_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            target = Path(temporary_directory) / "project"
+            target.mkdir()
+
+            result = self.run_script(
+                "--target", str(target), "--print-custom-instructions"
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("# Engineering defaults", result.stdout)
+            self.assertIn(f"Skills: {len(SOURCE_SKILLS)} installed", result.stdout)
+            self.assertTrue((target / "AGENTS.md").is_file())
 
     def test_generated_guidance_scopes_orchestration_and_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

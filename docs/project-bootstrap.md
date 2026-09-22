@@ -67,13 +67,16 @@ python3 scripts/bootstrap_project.py --target /absolute/path/to/your-project --t
 
 # 输出账户级 Custom Instructions，复制到 Codex 设置中
 python3 scripts/bootstrap_project.py --print-custom-instructions
+
+# 先输出指令，再安装用户级 Skills（指令仍需手动粘贴）
+python3 scripts/bootstrap_project.py --scope user --print-custom-instructions
 ```
 
 `--track-aitasks` 只阻止脚本添加忽略规则，不会读取或修改已存在的 `.gitignore`。如果需要更新已安装但内容不同的 Skill，应先审查差异并手动处理；脚本故意不提供默认覆盖选项。
 
 ## Codex Custom Instructions
 
-在 Codex 的设置中找到 Custom Instructions，将下面内容粘贴进去。它是每轮对话都应生效的短规则，不应再放入 `.aitasks` 或子 Agent 的详细流程。CodeGraph 的项目条件规则由 `--target` 写入目标项目的 `AGENTS.md`；`--scope user` 只安装 Skills，不修改全局 `AGENTS.md`。
+在 Codex 的设置中找到 Custom Instructions，将下面内容粘贴进去。它包含跨项目适用的简短 CodeGraph 条件规则；`--target` 也会将详细规则写入目标项目的 `AGENTS.md`。单独使用 `--print-custom-instructions` 只输出文本；与 `--scope user` 组合时会继续安装 Skills，但不会自动修改 Codex 设置或全局 `AGENTS.md`。
 
 ```md
 # Engineering defaults
@@ -87,6 +90,7 @@ python3 scripts/bootstrap_project.py --print-custom-instructions
 - 编辑项目代码时，不论是否使用入口 Skill，都用 `aitasks-maintenance` 为本任务创建或复用一条 todo，完成后写入实际结果并更新状态；仅修改 `.aitasks` 不递归创建 todo。
 - 用户明确要求记录经验时立即记录；否则同一问题第二次实质出现时自动沉淀。先检索并更新已有同类经验；未证实的原因标注未确认。
 - 每次允许写入 todo 或经验后按 `aitasks-maintenance` 阈值检查并自动归档清理：先归档再移出活动文件，不自动删除归档。只读或不修改文件时，不写记录、计数、忽略规则或归档。
+- 项目根目录有 `.codegraph/` 且索引可用时，理解未知代码结构、调用链或改动影响优先用 CodeGraph MCP；MCP 不可用且 CLI 可用时改用 CLI，首次使用先运行 `codegraph status`。已知路径或简单文本直接检索；图谱不可用或结果不足时回退常规工具，关键结论核对代码与测试，不自动执行 `codegraph init`。
 ```
 
 项目规则仍应写入目标项目的 `AGENTS.md`。脚本写入的区块只定义工程协作底线；技术栈、测试命令、领域约束和部署规则应由项目维护者在该文件的其他位置补充。

@@ -43,6 +43,7 @@ CUSTOM_INSTRUCTIONS = """# Engineering defaults
 - 编辑项目代码时，不论是否使用入口 Skill，都用 `aitasks-maintenance` 为本任务创建或复用一条 todo，完成后写入实际结果并更新状态；仅修改 `.aitasks` 不递归创建 todo。
 - 用户明确要求记录经验时立即记录；否则同一问题第二次实质出现时自动沉淀。先检索并更新已有同类经验；未证实的原因标注未确认。
 - 每次允许写入 todo 或经验后按 `aitasks-maintenance` 阈值检查并自动归档清理：先归档再移出活动文件，不自动删除归档。只读或不修改文件时，不写记录、计数、忽略规则或归档。
+- 项目根目录有 `.codegraph/` 且索引可用时，理解未知代码结构、调用链或改动影响优先用 CodeGraph MCP；MCP 不可用且 CLI 可用时改用 CLI，首次使用先运行 `codegraph status`。已知路径或简单文本直接检索；图谱不可用或结果不足时回退常规工具，关键结论核对代码与测试，不自动执行 `codegraph init`。
 """
 
 
@@ -414,7 +415,7 @@ def main() -> int:
     arguments = parser().parse_args()
     if arguments.print_custom_instructions:
         print(CUSTOM_INSTRUCTIONS.rstrip())
-        if arguments.target is None:
+        if arguments.target is None and arguments.scope is None:
             return 0
         print()
     if arguments.target is None and arguments.scope is None:

@@ -4,7 +4,7 @@ description: "定位远程 CI 流水线失败；仅在根因未明时转本地�
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.1
+  version: 1.7.2
 ---
 
 # CI/构建流水线失败定位
