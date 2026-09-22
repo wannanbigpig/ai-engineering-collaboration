@@ -48,11 +48,13 @@ python3 scripts/bootstrap_project.py --target /absolute/path/to/your-project
 
 ```json
 {
-  "contextFileName": "AGENTS.md"
+  "context": {
+    "fileName": "AGENTS.md"
+  }
 }
 ```
 
-注意该设置会替换 Gemini 在上下文层级中查找的文件名，项目内原有的 `GEMINI.md` 将不再被读取；两者都保留时，应把项目规则收敛到被指向的那一个文件。较旧的 Gemini CLI 版本还需要在其设置中开启 skills 开关。
+该设置会替换默认查找的文件名；需要同时读取两种规则时，可设置 `"fileName": ["AGENTS.md", "GEMINI.md"]`，并避免两份规则互相冲突。使用当前 [Gemini CLI 官方配置](https://geminicli.com/docs/cli/gemini-md/#customize-the-context-file-name) 的 `context.fileName`，不要在 `settings.json` 顶层写 `contextFileName`。较旧版本需核对对应版本的配置与 skills 开关。
 
 ## 常用选项
 
@@ -67,7 +69,7 @@ python3 scripts/bootstrap_project.py --target /absolute/path/to/your-project --t
 python3 scripts/bootstrap_project.py --print-custom-instructions
 ```
 
-`--track-aitasks` 只阻止脚本添加忽略规则，不会修改已存在的 `.gitignore`。如果需要更新已安装但内容不同的 Skill，应先审查差异并手动处理；脚本故意不提供默认覆盖选项。
+`--track-aitasks` 只阻止脚本添加忽略规则，不会读取或修改已存在的 `.gitignore`。如果需要更新已安装但内容不同的 Skill，应先审查差异并手动处理；脚本故意不提供默认覆盖选项。
 
 ## Codex Custom Instructions
 

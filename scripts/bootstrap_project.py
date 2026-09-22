@@ -109,7 +109,7 @@ def file_manifest(directory: Path) -> dict[str, str]:
 
 
 def read_regular_file(path: Path) -> str:
-    if not path.exists():
+    if not path.exists() and not path.is_symlink():
         return ""
     if path.is_symlink() or not path.is_file():
         raise BootstrapError(f"Expected a regular file or no path at: {path}")
@@ -153,16 +153,21 @@ def git_allows_ignore_update(target: Path) -> tuple[bool, str | None]:
     if tracked.stdout.strip():
         return False, ".aitasks is already tracked by Git"
 
-    history = run_git(target, "log", "-p", "--", ".gitignore")
-    if ".aitasks" in history.stdout:
+    history = run_git(target, "log", "--format=", "--unified=0", "-p", "--", ".gitignore")
+    if any(
+        line.startswith("-") and has_aitasks_rule(line[1:])
+        for line in history.stdout.splitlines()
+    ):
         return False, ".gitignore history contains a removed .aitasks rule"
     return True, None
 
 
 def render_gitignore(target: Path, track_aitasks: bool) -> tuple[Path, str | None, str | None]:
     path = target / ".gitignore"
+    if track_aitasks:
+        return path, None, None
     existing = read_regular_file(path)
-    if track_aitasks or has_aitasks_rule(existing):
+    if has_aitasks_rule(existing):
         return path, None, None
 
     allowed, reason = git_allows_ignore_update(target)

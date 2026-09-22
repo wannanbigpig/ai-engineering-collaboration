@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import signal
 import subprocess
@@ -313,10 +314,10 @@ def fixture_v2(scenario):
         files['.aitasks/lessons.md'] = '# 经验\n\n## 开发服务\n依赖安装后重启开发服务。\n'
     return files
 
-def functional_check(scenario, workspace):
+def functional_check(scenario, workspace, initial_todo=None):
     """Independent contract probes; final workspace snapshot is taken BEFORE these run."""
     if scenario in MAINTENANCE_SCENARIOS:
-        return maintenance_check(scenario, workspace)
+        return maintenance_check(scenario, workspace, initial_todo=initial_todo)
     if scenario == 'N01':
         try:
             return {'status': 'pass' if (workspace / 'README.md').read_text() == 'Welcome\n' else 'fail'}
@@ -343,13 +344,40 @@ def functional_check(scenario, workspace):
     except subprocess.TimeoutExpired:
         return {'status': 'fail', 'reason': 'contract probe timed out'}
 
-def maintenance_check(scenario, workspace, before=None, after_first=None):
+def probe_todo_records(text):
+    """Independent fixture grader: retain fields and full bodies, ignoring fenced examples."""
+    markers = []
+    fence = ''
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        delimiter = re.match(r'^ {0,3}(`{3,}|~{3,})', line)
+        if delimiter:
+            token = delimiter.group(1)
+            if not fence:
+                fence = token
+            elif token[0] == fence[0] and len(token) >= len(fence) and not line[delimiter.end():].strip():
+                fence = ''
+        elif not fence:
+            marker = re.fullmatch(r' {0,3}<!-- aitasks:todo ([^\r\n]+?) -->[ \t]*', line.rstrip('\r\n'))
+            if marker:
+                fields = marker.group(1).split()
+                if any('=' not in field for field in fields):
+                    return []
+                metadata = dict(field.split('=', 1) for field in fields)
+                if len(metadata) != len(fields):
+                    return []
+                markers.append((offset, offset + len(line), metadata))
+        offset += len(line)
+    return [(metadata, text[start:markers[i + 1][0] if i + 1 < len(markers) else len(text)].strip())
+            for i, (_, start, metadata) in enumerate(markers)]
+
+def maintenance_check(scenario, workspace, before=None, after_first=None, initial_todo=None):
     if scenario == 'M05':
         return {'status': 'not_applicable'}  # score checks ignored/untracked files.
     try:
         todo = (workspace / '.aitasks/todo.md').read_text()
         lessons = (workspace / '.aitasks/lessons.md').read_text()
-    except OSError as error:
+    except (OSError, UnicodeError) as error:
         return {'status': 'fail', 'reason': f'missing maintenance artifact: {error}'}
     todo_count = todo.count('<!-- aitasks:todo ')
     lesson_count = lessons.count('<!-- aitasks:lesson ')
@@ -367,15 +395,27 @@ def maintenance_check(scenario, workspace, before=None, after_first=None):
     elif scenario == 'M03':
         valid = lesson_count == 1 and todo_count == 0 and ('时区' in lessons or 'offset' in lessons)
     else:
+        if initial_todo is None:
+            return {'status': 'fail', 'reason': 'missing original todo fixture'}
         archive_dir = workspace / '.aitasks/archive'
         archives = sorted(archive_dir.glob('todo-*.md')) if archive_dir.exists() else []
-        valid = (len(archives) == 1 and '## old-todo-00' in archives[0].read_text()
-            and '## old-todo-00' not in todo and todo_count == 19
-            and all(f'## old-todo-{i:02d}' in todo for i in range(1, 19))
-            and todo.count('status=completed') == 19 and '待完成' not in todo)
+        try:
+            archived = probe_todo_records(archives[0].read_text()) if len(archives) == 1 else []
+        except (OSError, UnicodeError) as error:
+            return {'status': 'fail', 'reason': f'cannot read archive: {error}'}
+        expected = probe_todo_records(initial_todo)
+        active = probe_todo_records(todo)
+        valid = (len(expected) == 19 and len(active) == 19
+            and archived == expected[:1] and active[:-1] == expected[1:]
+            and active[-1][0].get('id') not in {record[0].get('id') for record in expected}
+            and bool(active[-1][0].get('id'))
+            and active[-1][0].get('status') == 'completed'
+            and active[-1][0].get('completed_at') not in {None, '-'}
+            and '待完成' not in active[-1][1] and lesson_count == 0)
     return {'status': 'pass' if valid else 'fail',
         'reason': None if valid else f'maintenance artifact mismatch: {scenario}',
-        'todo_records': todo_count, 'lesson_records': lesson_count}
+        'todo_records': todo_count, 'lesson_records': lesson_count,
+        **({'archive_order': 'unverified'} if scenario == 'M04' else {})}
 
 def score(scenario, before, after, traces, runs, skill_text, entry, external_paths=(), suite='legacy'):
     commands = [command for trace in traces for command in trace['commands']]
@@ -504,7 +544,7 @@ def run_case(args, source, variant, scenario, repetition):
     if len(runs) != len(prompts):
         result['execution'] = 'fail'
     probe = (maintenance_check(scenario, workspace, before, after_turns[0] if after_turns else None)
-        if scenario == 'M02' else functional_check(scenario, workspace))
+        if scenario == 'M02' else functional_check(scenario, workspace, files.get('.aitasks/todo.md')))
     result.update({'scenario': scenario, 'suite': args.suite, 'variant': variant, 'repetition': repetition,
         'runs': runs, 'trace_summary': traces, 'contract_probe': probe})
     if result['contract_probe']['status'] == 'fail':

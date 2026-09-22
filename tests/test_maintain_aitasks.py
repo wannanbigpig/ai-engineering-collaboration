@@ -175,6 +175,20 @@ class MaintainAitasksTest(unittest.TestCase):
         self.assertEqual(len(self.find("keyword").splitlines()), 1)
         self.assertEqual(self.find("keyword", "--include-content"), legacy.rstrip() + "\n")
 
+    def test_legacy_search_preserves_fenced_metadata_examples(self) -> None:
+        for fence in ("```", "~~~"):
+            with self.subTest(fence=fence):
+                legacy = ("## Legacy\nkeyword\n" + fence + "md\n" + MARKER
+                          + "## Example\n" + fence + "\nTail\n")
+                original = "# Lessons\n\n" + legacy + MARKER + "## Tracked\nother\n"
+                self.lessons.write_text(original, encoding="utf-8")
+                self.assertEqual(self.find("keyword", "--include-content"), legacy)
+                result = json.loads(self.find("keyword", "--json"))["matches"]
+                self.assertEqual(len(result), 1)
+                self.assertEqual(result[0]["content"], legacy.rstrip())
+                self.assertIsNone(result[0]["metadata"])
+                self.assertEqual(self.lessons.read_text(encoding="utf-8"), original)
+
     def test_multiple_top_level_records_and_deeper_records_are_searchable(self) -> None:
         for contents, expected in (
             ("# First\nkeyword\n# Second\nkeyword\n", ["First", "Second"]),

@@ -2,6 +2,14 @@
 
 仓库使用 [VERSION](VERSION) 作为唯一发布版本来源；全部 Skill 的 `metadata.version` 必须与它一致。本记录按仓库发布版本倒序维护。
 
+## Unreleased
+
+- 项目安装在需要更新配置时拒绝悬空的 `AGENTS.md` 和 `.gitignore` 链接，避免覆盖用户配置入口；`--track-aitasks` 不检查或改写 `.gitignore`。
+- 项目安装仅在 `.gitignore` 历史差异中确实删除过 `.aitasks` 忽略规则时保留用户选择，不再将提交说明或相似路径误判为删除。
+- 旧经验查询保留代码围栏中的元数据示例，文本与 JSON 输出不再丢失正文。
+- 自动维护 M04 探针基于原始 fixture 核对完整归档及保留记录，执行时序独立标记未验证。
+- 更新 Gemini CLI 的 `context.fileName` 配置示例，说明同时读取多个规则文件的方式。
+
 ## 1.7.1 - 2026-09-17
 
 - 在项目 `AGENTS.md` 模板和 Codex Custom Instructions 中加入有条件的前提核对、独立判断、事实/推断/预测区分，以及对关键结论的来源核实边界。

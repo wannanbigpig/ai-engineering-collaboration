@@ -1028,7 +1028,7 @@ def searchable_lesson_records(record_file: RecordFile) -> list[Record]:
                 records.append(
                     Record(
                         "lesson",
-                        MARKER_PATTERN.sub("", text[section_start:heading_start]),
+                        text[section_start:heading_start],
                         {},
                         section_start,
                         heading_start,
@@ -1038,7 +1038,7 @@ def searchable_lesson_records(record_file: RecordFile) -> list[Record]:
         if section_start is not None:
             records.append(
                 Record(
-                    "lesson", MARKER_PATTERN.sub("", text[section_start:end]),
+                    "lesson", text[section_start:end],
                     {}, section_start, end,
                 )
             )

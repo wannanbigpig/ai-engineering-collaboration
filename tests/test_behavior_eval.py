@@ -164,7 +164,7 @@ class FollowupEvaluationTests(unittest.TestCase):
             (root / '.aitasks/lessons.md').write_text('# 经验\n' + lesson + lesson)
             self.assertEqual(eval_tool.maintenance_check('M02', root, before, before)['status'], 'fail')
 
-    def test_maintenance_probe_checks_archive_before_removal(self):
+    def test_maintenance_probe_checks_complete_archive_content(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for name, content in eval_tool.fixture('M04', 'maintenance-v1').items():
@@ -181,9 +181,19 @@ class FollowupEvaluationTests(unittest.TestCase):
             archive.parent.mkdir()
             archive.write_text('<!-- archived_at=2026-09-22 source=todo.md -->\n' + archived)
             todo.write_text(old[:first] + old[second:] + '\n<!-- aitasks:todo id=00000000000040008000000000000020 created_at=2026-09-22 status=completed completed_at=2026-09-22 -->\n## 修改分隔符\n\n验证通过。\n')
-            self.assertEqual(eval_tool.maintenance_check('M04', root)['status'], 'pass')
-            archive.write_text('<!-- archived_at=2026-09-22 source=todo.md -->\n')
+            result = eval_tool.functional_check('M04', root, initial_todo=old)
+            self.assertEqual(result['status'], 'pass')
+            self.assertEqual(result['archive_order'], 'unverified')
             self.assertEqual(eval_tool.maintenance_check('M04', root)['status'], 'fail')
+            for damaged in ('## old-todo-00\n', archived.replace('已完成。', ''),
+                            archived.replace('status=completed', 'status=active'),
+                            '```md\n' + archived + '```\n', archived + archived):
+                with self.subTest(damaged=damaged):
+                    archive.write_text(damaged)
+                    self.assertEqual(eval_tool.maintenance_check('M04', root, initial_todo=old)['status'], 'fail')
+            archive.write_text(archived)
+            todo.write_text(todo.read_text().replace('已完成。', 'lost', 1))
+            self.assertEqual(eval_tool.maintenance_check('M04', root, initial_todo=old)['status'], 'fail')
 
     def test_legacy_fixture_is_not_rewritten(self):
         self.assertIn('与序列化无关', eval_tool.fixture('06')['.aitasks/lessons.md'])

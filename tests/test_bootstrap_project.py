@@ -78,6 +78,70 @@ class BootstrapProjectTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse((target / ".gitignore").exists())
 
+    def test_gitignore_history_mentions_do_not_count_as_removed_rule(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            target = Path(temporary_directory)
+            subprocess.run(["git", "init", "-q", str(target)], check=True)
+            gitignore = target / ".gitignore"
+            gitignore.write_text("foo.aitasks-cache\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(target), "add", ".gitignore"], check=True)
+            subprocess.run(
+                ["git", "-C", str(target), "-c", "user.name=Test", "-c",
+                 "user.email=test@example.invalid", "commit", "-qm", "mention .aitasks"],
+                check=True,
+            )
+
+            first = self.run_script("--target", str(target), "--dry-run")
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertIn("update .gitignore", first.stdout)
+
+            gitignore.write_text("*.log\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(target), "add", ".gitignore"], check=True)
+            subprocess.run(
+                ["git", "-C", str(target), "-c", "user.name=Test", "-c",
+                 "user.email=test@example.invalid", "commit", "-qm", "remove cache pattern"],
+                check=True,
+            )
+
+            second = self.run_script("--target", str(target), "--dry-run")
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertIn("update .gitignore", second.stdout)
+
+    def test_gitignore_history_keeps_intentionally_removed_rule(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            target = Path(temporary_directory)
+            subprocess.run(["git", "init", "-q", str(target)], check=True)
+            gitignore = target / ".gitignore"
+            for content, message in ((".aitasks/\n", "add rule"), ("*.log\n", "remove rule")):
+                gitignore.write_text(content, encoding="utf-8")
+                subprocess.run(["git", "-C", str(target), "add", ".gitignore"], check=True)
+                subprocess.run(
+                    ["git", "-C", str(target), "-c", "user.name=Test", "-c",
+                     "user.email=test@example.invalid", "commit", "-qm", message],
+                    check=True,
+                )
+
+            result = self.run_script("--target", str(target), "--dry-run")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("leave .gitignore unchanged", result.stdout)
+            self.assertNotIn("update .gitignore", result.stdout)
+
+    def test_track_aitasks_does_not_inspect_gitignore_symlink(self) -> None:
+        for extra in (("--dry-run",), ()):
+            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as directory:
+                target = Path(directory)
+                gitignore = target / ".gitignore"
+                gitignore.symlink_to("missing-config")
+
+                result = self.run_script("--target", str(target), "--track-aitasks", *extra)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(gitignore.is_symlink())
+                self.assertEqual(gitignore.readlink(), Path("missing-config"))
+                self.assertFalse((target / "missing-config").exists())
+                if not extra:
+                    self.assertIn(".gitignore: no change required", result.stdout)
+
     def test_prints_custom_instructions_without_a_target(self) -> None:
         result = self.run_script("--print-custom-instructions")
 
@@ -311,6 +375,20 @@ class BootstrapProjectTest(unittest.TestCase):
             self.assertIn("differs from the source Skill", result.stderr)
             self.assertFalse((target / "AGENTS.md").exists())
             self.assertFalse((target / ".gitignore").exists())
+
+    def test_dangling_config_links_fail_before_any_installation(self) -> None:
+        for name in ("AGENTS.md", ".gitignore"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                target = Path(directory)
+                link = target / name
+                link.symlink_to("missing-config")
+                for extra in (("--dry-run",), ()):
+                    result = self.run_script("--target", str(target), *extra)
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn("Expected a regular file", result.stderr)
+                    self.assertTrue(link.is_symlink())
+                    self.assertEqual(link.readlink(), Path("missing-config"))
+                    self.assertEqual(list(target.iterdir()), [link])
 
     def test_dangling_skill_link_is_a_preflight_conflict(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
