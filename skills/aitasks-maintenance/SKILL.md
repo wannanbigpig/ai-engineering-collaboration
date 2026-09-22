@@ -4,7 +4,7 @@ description: "代码编辑任务自动记录 todo，重复问题自动沉淀经�
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.3
+  version: 1.7.4
 ---
 
 # `.aitasks` 维护

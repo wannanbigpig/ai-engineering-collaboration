@@ -4,7 +4,7 @@ description: "分析尚未明确的共享行为、跨模块数据流或契约影
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.3
+  version: 1.7.4
 ---
 
 # 变更影响分析

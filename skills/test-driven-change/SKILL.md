@@ -4,7 +4,7 @@ description: "为有回归风险的功能或 Bug 变更选择测试策略；低�
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.3
+  version: 1.7.4
 ---
 
 # 测试先行的变更
