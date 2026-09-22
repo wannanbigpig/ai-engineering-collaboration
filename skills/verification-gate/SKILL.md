@@ -4,7 +4,7 @@ description: "补足明确验证请求或高风险交付、发布前的证据缺
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.2
+  version: 1.7.3
 ---
 
 # 验证关卡

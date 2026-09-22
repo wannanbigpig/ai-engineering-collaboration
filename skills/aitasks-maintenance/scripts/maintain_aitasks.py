@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import sys
 import tempfile
 import time
@@ -724,6 +725,7 @@ class MaintenanceLock:
         self.sleep_interval = sleep_interval
         self._acquired = False
         self._identity: tuple[int, int] | None = None
+        self._contents: bytes | None = None
 
     def __enter__(self) -> MaintenanceLock:
         if not self.enabled:
@@ -750,14 +752,16 @@ class MaintenanceLock:
             time.sleep(self.sleep_interval)
 
     def _create(self) -> None:
-        with self.path.open("x", encoding="utf-8") as handle:
-            handle.write(f"{os.getpid()}\n")
+        contents = f"{os.getpid()}\n{secrets.token_hex(16)}\n".encode("ascii")
+        with self.path.open("xb") as handle:
+            handle.write(contents)
             stat_result = os.fstat(handle.fileno())
             self._identity = (stat_result.st_dev, stat_result.st_ino)
+            self._contents = contents
 
     def _read_pid(self) -> int | None:
         try:
-            text = self.path.read_text(encoding="utf-8").strip()
+            text = self.path.read_text(encoding="utf-8").partition("\n")[0].strip()
         except OSError:
             return None
         try:
@@ -800,9 +804,15 @@ class MaintenanceLock:
                 except FileNotFoundError:
                     current = None
                 if current and self._identity == (current.st_dev, current.st_ino):
-                    self.path.unlink()
+                    try:
+                        contents = self.path.read_bytes()
+                    except OSError:
+                        contents = None
+                    if contents == self._contents:
+                        self.path.unlink()
             self._acquired = False
             self._identity = None
+            self._contents = None
         return False
 
 

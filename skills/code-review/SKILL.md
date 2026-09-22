@@ -4,7 +4,7 @@ description: "审查代码或核实审查反馈；默认只读，明确要求修
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.2
+  version: 1.7.3
 ---
 
 # 代码审查与反馈核验

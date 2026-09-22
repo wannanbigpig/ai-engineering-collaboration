@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+## 1.7.3 - 2026-09-22
+
+- 维护锁增加每次获取唯一的令牌，释放时同时核对内容与 inode，避免 Linux 立即复用 inode 导致旧持有者误删替换锁；回归测试稳定模拟该场景。
+
 ## 1.7.2 - 2026-09-22
 
 - `--print-custom-instructions` 输出精简的 CodeGraph 条件规则；与 `--scope user` 同时使用时打印后继续安装 Skills。

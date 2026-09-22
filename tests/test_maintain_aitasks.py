@@ -503,6 +503,9 @@ class MaintainAitasksTest(unittest.TestCase):
         with lock:
             lock_path.unlink()
             lock_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+            # Simulate a filesystem immediately reusing the released inode.
+            replacement = lock_path.lstat()
+            lock._identity = (replacement.st_dev, replacement.st_ino)
 
         self.assertTrue(lock_path.exists())
 
