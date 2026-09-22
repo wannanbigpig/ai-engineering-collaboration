@@ -148,6 +148,12 @@ class BootstrapProjectTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("# Engineering defaults", result.stdout)
         self.assertIn("使用中文回复", result.stdout)
+        self.assertIn("若当前项目有 `.aitasks/lessons.md`", result.stdout)
+        self.assertIn("不默认整篇加载或更新计数", result.stdout)
+        self.assertLess(
+            result.stdout.index("先按任务关键词轻量检索标题和正文"),
+            result.stdout.index("先调查相关实现"),
+        )
         self.assertIn("`.codegraph/`", result.stdout)
         self.assertIn("`codegraph status`", result.stdout)
         self.assertIn("不自动执行 `codegraph init`", result.stdout)
