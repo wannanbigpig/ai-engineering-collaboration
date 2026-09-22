@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+- README 安装章节补全：`npx skills` 独立小节（list/项目/全局/指定 Skill 与 Agent/升级卸载）、前置条件对照表、用户级与项目级脚本示例，以及安装后刷新步骤。
+- README 增加「配合 Custom Instructions」：说明账户级指令、项目 `AGENTS.md` 与 Skill 的三层分工、打印/粘贴流程，以及仅用 `npx` 时的获取方式。
+
 ## 1.7.3 - 2026-09-22
 
 - 维护锁增加每次获取唯一的令牌，释放时同时核对内容与 inode，避免 Linux 立即复用 inode 导致旧持有者误删替换锁；回归测试稳定模拟该场景。
