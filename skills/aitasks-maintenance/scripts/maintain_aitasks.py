@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import hashlib
 import json
 import os
@@ -11,18 +12,23 @@ import re
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
 
 MARKER_PATTERN = re.compile(
-    r"<!--\s*aitasks:(?P<kind>lesson|todo)\s+(?P<fields>.*?)\s*-->",
-    re.DOTALL,
+    r"^ {0,3}<!--[ \t]*aitasks:(?P<kind>lesson|todo)[ \t]+(?P<fields>[^\r\n]*?)[ \t]*-->[ \t]*$",
+    re.MULTILINE,
+)
+ARCHIVE_HEADER_PATTERN = re.compile(
+    r"^<!-- archived_at=\d{4}-\d{2}-\d{2} source=[^\r\n>]* -->$", re.MULTILINE
 )
 FIELD_PATTERN = re.compile(r"(?P<key>[a-z_]+)=(?P<value>[^\s]+)")
-HEADING_PATTERN = re.compile(r"^#{1,6}\s+(?P<title>.+?)\s*$", re.MULTILINE)
+HEADING_PATTERN = re.compile(r"^#{1,6}[ \t]+(?P<title>.+?)[ \t]*$", re.MULTILINE)
+FENCE_PATTERN = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 COMPLETED_TODO_STATUSES = {"completed", "cancelled"}
 
 LOCK_FILE_NAME = ".maintenance.lock"
@@ -114,27 +120,82 @@ def parse_fields(value: str) -> dict[str, str]:
     }
 
 
-def marker_ids(text: str) -> set[str]:
-    """Every explicit id= value found inside aitasks markers in ``text``."""
-    ids: set[str] = set()
-    for match in MARKER_PATTERN.finditer(text):
-        for field in FIELD_PATTERN.finditer(match.group("fields")):
-            if field.group("key") == "id":
-                ids.add(field.group("value"))
-    return ids
+class ArchiveConflictError(ValueError):
+    """An archive ID cannot safely identify one unchanged record."""
 
 
-def collect_archive_ids(archive_dir: Path, prefix: str) -> set[str]:
-    """Record ids already stored in any archive file named '<prefix>-*.md'."""
-    ids: set[str] = set()
-    if not archive_dir.is_dir():
-        return ids
-    for path in sorted(archive_dir.glob(f"{prefix}-*.md")):
-        try:
-            ids.update(marker_ids(path.read_text(encoding="utf-8")))
-        except OSError:
+def unfenced_matches(text: str, pattern: re.Pattern[str]) -> list[re.Match[str]]:
+    """Match line-start syntax outside Markdown code fences."""
+    matches: list[re.Match[str]] = []
+    fence = ""
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        fence_match = FENCE_PATTERN.match(line)
+        if fence_match:
+            delimiter = fence_match.group(1)
+            if not fence:
+                fence = delimiter
+            elif (
+                delimiter[0] == fence[0]
+                and len(delimiter) >= len(fence)
+                and not line[fence_match.end() :].strip()
+            ):
+                fence = ""
+        elif not fence:
+            match = pattern.match(text, offset)
+            if match:
+                matches.append(match)
+        offset += len(line)
+    return matches
+
+
+def record_markers(text: str, kind: str | None = None) -> list[re.Match[str]]:
+    """Metadata must directly precede its heading, not appear in an example."""
+    headings = unfenced_matches(text, HEADING_PATTERN)
+    positions = [heading.start() for heading in headings]
+    markers: list[re.Match[str]] = []
+    for marker in unfenced_matches(text, MARKER_PATTERN):
+        if kind is not None and marker.group("kind") != kind:
             continue
-    return ids
+        index = bisect.bisect_left(positions, marker.end())
+        if index < len(headings) and not text[marker.end() : headings[index].start()].strip():
+            markers.append(marker)
+    return markers
+
+
+def archive_record_contents(text: str) -> dict[str, str]:
+    """Index archived records by ID and their exact rendered content."""
+    markers = record_markers(text)
+    header_positions = [match.start() for match in unfenced_matches(text, ARCHIVE_HEADER_PATTERN)]
+    contents: dict[str, str] = {}
+    for index, marker in enumerate(markers):
+        record_id_value = parse_fields(marker.group("fields")).get("id")
+        if not record_id_value:
+            continue
+        end = markers[index + 1].start() if index + 1 < len(markers) else len(text)
+        next_header = bisect.bisect_left(header_positions, marker.end())
+        if next_header < len(header_positions) and header_positions[next_header] < end:
+            end = header_positions[next_header]
+        content = text[marker.start():end].strip("\r\n")
+        previous = contents.setdefault(record_id_value, content)
+        if previous != content:
+            raise ArchiveConflictError(f"archive ID collision: {record_id_value}")
+    return contents
+
+
+def collect_archive_records(archive_dir: Path, prefix: str) -> dict[str, str]:
+    """Read all existing archive records; fail closed on conflicts or read errors."""
+    contents: dict[str, str] = {}
+    if not archive_dir.is_dir():
+        return contents
+    for path in sorted(archive_dir.glob(f"{prefix}-*.md")):
+        for record_id_value, content in archive_record_contents(
+            path.read_text(encoding="utf-8")
+        ).items():
+            previous = contents.setdefault(record_id_value, content)
+            if previous != content:
+                raise ArchiveConflictError(f"archive ID collision: {record_id_value}")
+    return contents
 
 
 def load_record_file(path: Path, kind: str) -> RecordFile:
@@ -142,9 +203,9 @@ def load_record_file(path: Path, kind: str) -> RecordFile:
         return RecordFile(path=path, text="", records=[])
 
     text = path.read_text(encoding="utf-8")
-    markers = [
-        match for match in MARKER_PATTERN.finditer(text) if match.group("kind") == kind
-    ]
+    markers = record_markers(text, kind)
+    headings = unfenced_matches(text, HEADING_PATTERN)
+    heading_positions = [heading.start() for heading in headings]
     if not markers:
         return RecordFile(path=path, text=text, records=[])
 
@@ -154,12 +215,14 @@ def load_record_file(path: Path, kind: str) -> RecordFile:
             markers[index + 1].start() if index + 1 < len(markers) else len(text)
         )
         end = next_marker_start
-        heading = HEADING_PATTERN.search(text, marker.end(), next_marker_start)
-        if heading:
+        heading_index = bisect.bisect_left(heading_positions, marker.end())
+        if heading_index < len(headings) and headings[heading_index].start() < next_marker_start:
+            heading = headings[heading_index]
             heading_level = len(heading.group(0)) - len(heading.group(0).lstrip("#"))
-            for candidate in HEADING_PATTERN.finditer(
-                text, heading.end(), next_marker_start
-            ):
+            next_heading_index = bisect.bisect_left(
+                heading_positions, next_marker_start, heading_index + 1
+            )
+            for candidate in headings[heading_index + 1 : next_heading_index]:
                 candidate_level = len(candidate.group(0)) - len(
                     candidate.group(0).lstrip("#")
                 )
@@ -304,18 +367,71 @@ def build_cleanup_plan(
     )
     if not reasons:
         return CleanupPlan(due_reasons=[], lessons=[], todos=[])
+    stale_lessons = [
+        record for record in lesson_file.records if lesson_is_stale(record, today, policy)
+    ]
+    stale_todos = [
+        record for record in todo_file.records if todo_is_stale(record, today, policy)
+    ]
+    stale_lesson_ids = {id(record) for record in stale_lessons}
+    stale_todo_ids = {id(record) for record in stale_todos}
+
+    # A count trigger must reduce the active file even when records are recent.
+    # Archive the oldest eligible overflow, then preserve source order for writes.
+    lesson_overflow = max(
+        0, len(lesson_file.records) - len(stale_lessons) - policy.lesson_count_trigger + 1
+    )
+    if lesson_overflow:
+        candidates = []
+        for record in lesson_file.records:
+            if (
+                id(record) in stale_lesson_ids
+                or record.fields.get("pinned", "false").lower() == "true"
+            ):
+                continue
+            created_at = parse_date(record.fields.get("created_at"))
+            try:
+                use_count = int(record.fields.get("use_count", ""))
+            except ValueError:
+                continue
+            if created_at is not None and use_count >= 0:
+                candidates.append((use_count, created_at, record.start, record))
+        stale_lessons.extend(
+            item[3]
+            for item in sorted(candidates, key=lambda item: item[:3])[:lesson_overflow]
+        )
+        stale_lesson_ids.update(id(record) for record in stale_lessons)
+
+    completed_count = sum(
+        record.fields.get("status") in COMPLETED_TODO_STATUSES
+        for record in todo_file.records
+    )
+    todo_overflow = max(
+        0, completed_count - len(stale_todos) - policy.todo_count_trigger + 1
+    )
+    if todo_overflow:
+        candidates = []
+        for record in todo_file.records:
+            if (
+                id(record) in stale_todo_ids
+                or record.fields.get("status") not in COMPLETED_TODO_STATUSES
+            ):
+                continue
+            completed_at = parse_date(record.fields.get("completed_at"))
+            if completed_at is not None:
+                candidates.append((completed_at, record.start, record))
+        stale_todos.extend(
+            item[2]
+            for item in sorted(candidates, key=lambda item: item[:2])[:todo_overflow]
+        )
+        stale_todo_ids.update(id(record) for record in stale_todos)
+
     return CleanupPlan(
         due_reasons=reasons,
         lessons=[
-            record
-            for record in lesson_file.records
-            if lesson_is_stale(record, today, policy)
+            record for record in lesson_file.records if id(record) in stale_lesson_ids
         ],
-        todos=[
-            record
-            for record in todo_file.records
-            if todo_is_stale(record, today, policy)
-        ],
+        todos=[record for record in todo_file.records if id(record) in stale_todo_ids],
     )
 
 
@@ -325,23 +441,28 @@ def prepare_archive_content(
     source_path: Path,
     records: list[Record],
     today: date,
-    existing_ids: set[str] | None = None,
+    existing_records: dict[str, str] | None = None,
 ) -> str | None:
-    """Build the full archive file content, skipping already-archived records.
-
-    A record is skipped when its stable id already appears in ``existing_ids``
-    (or, by default, in ``existing_text`` itself) or was appended earlier in
-    this same batch. Returns None when there is nothing new to append.
-    """
+    """Build archive content, rejecting ambiguous IDs before any file is removed."""
     seen = (
-        set(existing_ids) if existing_ids is not None else marker_ids(existing_text)
+        dict(existing_records)
+        if existing_records is not None
+        else archive_record_contents(existing_text)
     )
+    batch_ids: set[str] = set()
     to_append: list[Record] = []
     for record in records:
         archived = record.with_archive_id()
-        if archived.fields["id"] in seen:
+        record_id_value = archived.fields["id"]
+        content = archived.render().strip("\r\n")
+        if record_id_value in batch_ids:
+            raise ArchiveConflictError(f"archive ID collision: {record_id_value}")
+        batch_ids.add(record_id_value)
+        if record_id_value in seen:
+            if seen[record_id_value] != content:
+                raise ArchiveConflictError(f"archive ID collision: {record_id_value}")
             continue
-        seen.add(archived.fields["id"])
+        seen[record_id_value] = content
         to_append.append(archived)
     if not to_append:
         return None
@@ -362,7 +483,7 @@ def append_archive(
     records: list[Record],
     today: date,
 ) -> bool:
-    """Append records to an archive file, skipping ids already present there.
+    """Append records to an archive file, skipping identical records already there.
 
     Returns True when the file was written, False when nothing was appended.
     """
@@ -413,7 +534,7 @@ def prepare_cleanup_writes(
             lesson_path,
             plan.lessons,
             today,
-            collect_archive_ids(archive_dir, "lessons"),
+            collect_archive_records(archive_dir, "lessons"),
         )
         if content is not None:
             archive_writes.append((archive_path, content))
@@ -430,7 +551,7 @@ def prepare_cleanup_writes(
             todo_path,
             plan.todos,
             today,
-            collect_archive_ids(archive_dir, "todo"),
+            collect_archive_records(archive_dir, "todo"),
         )
         if content is not None:
             archive_writes.append((archive_path, content))
@@ -502,7 +623,7 @@ def report_commit_error(error: CommitError) -> int:
     print(f"  Cause: {error.error}", file=sys.stderr)
     print(
         "  Recovery: rerun `cleanup --apply`; records already archived are "
-        "deduplicated by stable id, so nothing will be appended twice.",
+        "skipped only when their ID and content still match.",
         file=sys.stderr,
     )
     return 1
@@ -539,11 +660,50 @@ def _pid_alive_windows(pid: int) -> bool:
         kernel32.CloseHandle(handle)
 
 
+@contextmanager
+def lock_transition_guard(
+    path: Path, timeout: float, sleep_interval: float
+) -> Iterator[None]:
+    """Serialize changes to the PID lock through a persistent OS-locked file."""
+    guard_path = path.with_name(path.name + ".guard")
+    with guard_path.open("a+b") as guard:
+        if os.name == "nt":
+            import msvcrt
+
+            if guard.seek(0, os.SEEK_END) == 0:
+                guard.write(b"\0")
+                guard.flush()
+            guard.seek(0)
+        else:
+            import fcntl
+
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                if os.name == "nt":
+                    msvcrt.locking(guard.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(guard.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise SystemExit(f"another maintenance process is changing {path}")
+                time.sleep(sleep_interval)
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                guard.seek(0)
+                msvcrt.locking(guard.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(guard.fileno(), fcntl.LOCK_UN)
+
+
 class MaintenanceLock:
     """Cross-platform advisory lock via an O_CREAT|O_EXCL lock file.
 
-    The lock file records the holder's pid. A lock is stale (and reclaimable)
-    when its pid is gone or when the file is older than ``stale_seconds``.
+    The lock file records the holder's pid. A dead holder is reclaimable;
+    age is a fallback only when no valid pid has been written.
     Contention is retried until ``timeout`` seconds, then SystemExit is
     raised. Set ``enabled=False`` (or AITASKS_DISABLE_LOCK=1) to skip locking.
     """
@@ -563,6 +723,7 @@ class MaintenanceLock:
         self.enabled = enabled
         self.sleep_interval = sleep_interval
         self._acquired = False
+        self._identity: tuple[int, int] | None = None
 
     def __enter__(self) -> MaintenanceLock:
         if not self.enabled:
@@ -570,25 +731,29 @@ class MaintenanceLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         deadline = time.monotonic() + self.timeout
         while True:
-            try:
-                self._create()
-                self._acquired = True
-                return self
-            except FileExistsError:
-                if self._reclaim_stale():
-                    continue
-                if time.monotonic() >= deadline:
-                    holder = self._read_pid()
-                    detail = f" (pid {holder})" if holder is not None else ""
-                    raise SystemExit(
-                        f"another maintenance process holds {self.path}{detail}; "
-                        "retry when it finishes (or remove the lock file if stale)"
-                    )
-                time.sleep(self.sleep_interval)
+            with lock_transition_guard(self.path, self.timeout, self.sleep_interval):
+                try:
+                    self._create()
+                except FileExistsError:
+                    if self._reclaim_stale():
+                        self._create()
+                if self._identity is not None:
+                    self._acquired = True
+                    return self
+                holder = self._read_pid()
+            if time.monotonic() >= deadline:
+                detail = f" (pid {holder})" if holder is not None else ""
+                raise SystemExit(
+                    f"another maintenance process holds {self.path}{detail}; "
+                    "retry when it finishes (or remove the lock file if stale)"
+                )
+            time.sleep(self.sleep_interval)
 
     def _create(self) -> None:
         with self.path.open("x", encoding="utf-8") as handle:
             handle.write(f"{os.getpid()}\n")
+            stat_result = os.fstat(handle.fileno())
+            self._identity = (stat_result.st_dev, stat_result.st_ino)
 
     def _read_pid(self) -> int | None:
         try:
@@ -596,17 +761,25 @@ class MaintenanceLock:
         except OSError:
             return None
         try:
-            return int(text)
+            pid = int(text)
+            return pid if pid > 0 else None
         except ValueError:
             return None
 
     def _reclaim_stale(self) -> bool:
+        try:
+            before = self.path.lstat()
+        except FileNotFoundError:
+            return False
         if not self.is_stale():
             return False
         try:
-            self.path.unlink()
+            after = self.path.lstat()
         except FileNotFoundError:
-            pass
+            return False
+        if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+            return False
+        self.path.unlink()
         return True
 
     def is_stale(self) -> bool:
@@ -614,20 +787,22 @@ class MaintenanceLock:
             stat_result = self.path.stat()
         except FileNotFoundError:
             return False
-        if time.time() - stat_result.st_mtime > self.stale_seconds:
-            return True
         pid = self._read_pid()
-        if pid is None:
-            return True
-        return not pid_alive(pid)
+        if pid is not None:
+            return not pid_alive(pid)
+        return time.time() - stat_result.st_mtime > self.stale_seconds
 
     def __exit__(self, exc_type, exc, traceback) -> bool:
         if self._acquired:
-            try:
-                self.path.unlink()
-            except FileNotFoundError:
-                pass
+            with lock_transition_guard(self.path, self.timeout, self.sleep_interval):
+                try:
+                    current = self.path.lstat()
+                except FileNotFoundError:
+                    current = None
+                if current and self._identity == (current.st_dev, current.st_ino):
+                    self.path.unlink()
             self._acquired = False
+            self._identity = None
         return False
 
 
@@ -822,23 +997,8 @@ def searchable_lesson_records(record_file: RecordFile) -> list[Record]:
     """
     text = record_file.text
     headings: list[tuple[int, int]] = []
-    fence = ""
-    offset = 0
-    for line in text.splitlines(keepends=True):
-        fence_match = re.match(r"^ {0,3}(`{3,}|~{3,})", line)
-        if fence_match:
-            delimiter = fence_match.group(1)
-            if not fence:
-                fence = delimiter
-            elif (
-                delimiter[0] == fence[0]
-                and len(delimiter) >= len(fence)
-                and not line[fence_match.end() :].strip()
-            ):
-                fence = ""
-        elif not fence and HEADING_PATTERN.match(line):
-            headings.append((offset, len(line) - len(line.lstrip("#"))))
-        offset += len(line)
+    for heading in unfenced_matches(text, HEADING_PATTERN):
+        headings.append((heading.start(), len(heading.group(0)) - len(heading.group(0).lstrip("#"))))
 
     # A sole leading H1 with child headings is the document title.
     if (
@@ -938,16 +1098,20 @@ def command_cleanup(args: argparse.Namespace) -> int:
             print("No changes applied because maintenance is not due.")
             return 0
 
-        writes = prepare_cleanup_writes(
-            today,
-            archive_dir,
-            lesson_path,
-            todo_path,
-            state_path,
-            lesson_file,
-            todo_file,
-            plan,
-        )
+        try:
+            writes = prepare_cleanup_writes(
+                today,
+                archive_dir,
+                lesson_path,
+                todo_path,
+                state_path,
+                lesson_file,
+                todo_file,
+                plan,
+            )
+        except (ArchiveConflictError, OSError, UnicodeError) as error:
+            print(f"ERROR: cleanup aborted before writing: {error}", file=sys.stderr)
+            return 1
         if not writes:
             print(
                 "No changes applied because every eligible record is already archived."

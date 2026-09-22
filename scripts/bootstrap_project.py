@@ -24,11 +24,10 @@ MANAGED_AGENTS_SECTION = f"""{AGENTS_BEGIN}
 # AI Engineering Collaboration
 
 - Read and follow applicable `AGENTS.md`, `AGENTS.override.md`, and `CLAUDE.md`; closer project rules take precedence.
-- Check only assumptions, logical leaps, and information gaps that could materially change the result; verify what current evidence can establish and ask only when an unresolved choice affects delivery.
-- Keep judgments independent and distinguish verified facts, evidence-based inferences, forecasts, and recommendations. Verify reliable sources for time-sensitive, disputed, high-stakes, or precision-dependent claims; otherwise state the evidence limit.
-- When a material disagreement, omitted variable, hidden cost, or likely decision bias would change the outcome, state the evidence, risk, and plausible alternative; do not add low-impact caveat lists.
-- Inspect the implementation and constraints relevant to the task before editing; for bugs, make the smallest root-cause fix and preserve unrelated work.
-- When behavior or a deliverable changes, run the smallest validation that covers the risk; reuse fresh results when inputs are unchanged, and do not run unrelated tests for documentation-only changes.
+- Check only material assumptions and gaps; distinguish verified facts from inferences and unknowns. Source-check time-sensitive or high-stakes claims, and explain disagreements that would change the outcome.
+- Inspect relevant implementation, constraints, and existing edits before changing code; make the smallest root-cause fix and preserve unrelated work. Validate changed behavior in proportion to risk, reuse fresh evidence, and state what remains unverified.
+- For every project-code editing task, use `aitasks-maintenance` to create or reuse one todo and close it with the actual result. Record a lesson immediately when the user explicitly asks, or after an issue's second substantive occurrence; check cleanup thresholds after allowed writes. Read-only tasks do not write records.
+- Only with a usable `.codegraph/` index, prefer CodeGraph MCP then CLI for unknown code structure or impact; check `codegraph status` when the CLI is available. Use direct search for known paths or simple text, fall back when graph results are insufficient, verify important conclusions against code/tests, and never run `codegraph init` automatically.
 - Use `ai-engineering-collaboration` only when the task needs coordination across multiple specialist stages or the user explicitly requests it; handle a single clear workflow directly or with its matching specialist skill.
 {AGENTS_END}
 """
@@ -36,15 +35,14 @@ MANAGED_AGENTS_SECTION = f"""{AGENTS_BEGIN}
 CUSTOM_INSTRUCTIONS = """# Engineering defaults
 
 - 使用中文回复；代码、命令、文件名、错误日志和 API 名称保持原文。
-- 对会实质改变结论的错误前提、逻辑跳跃和信息缺口先核对；可由现有证据确认的自行查证，只有无法推导且会改变交付时才询问。
-- 保持独立判断，明确区分已验证事实、证据支持的推断、趋势预测和主观建议；不因用户预设而改变结论。
-- 对时效性、争议性、高风险，或依赖精确数字和人物信息的关键结论，优先核实可靠来源；无法核实时说明证据边界，不编造。
-- 与用户判断存在实质分歧，或发现会改变决策的遗漏变量、隐藏成本或判断偏差时，直接说明依据、风险和替代解释；不为低影响事项堆叠免责声明。
-- 修改前读取并遵守适用的 `AGENTS.md`、`CLAUDE.md`；项目规则和更近路径规则优先。
-- 修改前核对与任务直接相关的实现和约束；Bug 在根因明确后做最小修复，不得改动或覆盖无关内容。
-- 行为或交付物发生变化后，运行覆盖风险的最小验证；输入未变的新鲜结果可复用，纯文档或注释修改不默认运行无关测试，未验证不得宣称完成。
-- 代码变更任务完成时，仅说明：做了什么、关键修改、根因、验证方式、遗留风险或未验证项。
-- 仅当任务需要跨多个专项阶段统筹，或用户明确指定时，使用 `ai-engineering-collaboration`；单一明确任务直接处理或使用对应专项 Skill。
+- 修改前读取并遵守适用的 `AGENTS.md`、`AGENTS.override.md`、`CLAUDE.md`；更具体路径规则优先。
+- 只核对会改变结论或交付的关键前提与信息缺口；保持独立判断，区分已验证事实、推断和未验证项。时效性或高风险结论优先查证；实质分歧说明依据和风险。
+- 先调查相关实现、约束及工作区已有改动；Bug 确定根因后做当前任务所需的最小修复，保留无关修改。
+- 修改后按风险执行最小必要验证；可复用输入未变的近期结果，不为纯文档变更运行无关测试。未经验证不得宣称通过，无法验证时说明边界。
+- 单一明确工程任务直接处理或使用对应专项 Skill；确需跨多个专项阶段统筹或用户明确指定时，使用 `ai-engineering-collaboration`。
+- 编辑项目代码时，不论是否使用入口 Skill，都用 `aitasks-maintenance` 为本任务创建或复用一条 todo，完成后写入实际结果并更新状态；仅修改 `.aitasks` 不递归创建 todo。
+- 用户明确要求记录经验时立即记录；否则同一问题第二次实质出现时自动沉淀。先检索并更新已有同类经验；未证实的原因标注未确认。
+- 每次允许写入 todo 或经验后按 `aitasks-maintenance` 阈值检查并自动归档清理：先归档再移出活动文件，不自动删除归档。只读或不修改文件时，不写记录、计数、忽略规则或归档。
 """
 
 
@@ -188,6 +186,8 @@ def atomic_write(path: Path, content: str) -> None:
 def skill_install_plan(
     sources: list[Path], destination_root: Path
 ) -> tuple[list[Path], list[Path], list[str]]:
+    if destination_root.is_symlink() and not destination_root.exists():
+        raise BootstrapError(f"Expected a directory or no path at: {destination_root}")
     if destination_root.exists() and not destination_root.is_dir():
         raise BootstrapError(f"Expected a directory or no path at: {destination_root}")
 
@@ -196,7 +196,9 @@ def skill_install_plan(
     conflicts: list[str] = []
     for source in sources:
         destination = destination_root / source.name
-        if not destination.exists():
+        if destination.is_symlink() and not destination.exists():
+            conflicts.append(f"{destination} exists but is not a directory")
+        elif not destination.exists():
             install_sources.append(source)
         elif not destination.is_dir():
             conflicts.append(f"{destination} exists but is not a directory")
@@ -224,6 +226,8 @@ def compatibility_link_plan(
     sources: list[Path], destination_root: Path, harness: str
 ) -> tuple[list[Path], list[Path], list[str]]:
     """Plan links from a harness-specific discovery directory to .agents/skills."""
+    if destination_root.is_symlink() and not destination_root.exists():
+        raise BootstrapError(f"Expected a directory or no path at: {destination_root}")
     if destination_root.exists() and not destination_root.is_dir():
         raise BootstrapError(f"Expected a directory or no path at: {destination_root}")
 

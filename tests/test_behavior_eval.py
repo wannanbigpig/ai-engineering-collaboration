@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 SPEC = importlib.util.spec_from_file_location('behavior_eval', Path(__file__).resolve().parents[1] / 'evals/behavior_eval.py')
@@ -132,6 +133,58 @@ class BehaviorEvaluationTests(unittest.TestCase):
 
 
 class FollowupEvaluationTests(unittest.TestCase):
+    def test_maintenance_suite_keeps_entry_unpinned_and_threshold_reproducible(self):
+        self.assertEqual(len(eval_tool.MAINTENANCE_SCENARIOS), 5)
+        self.assertTrue(all(item[1] is None for item in eval_tool.MAINTENANCE_SCENARIOS.values()))
+        rules = eval_tool.fixture_rules(None, 'maintenance-v1')
+        self.assertIn('代码', rules)
+        self.assertIn('第二次', rules)
+        self.assertNotIn('先读取 .agents/skills/ai-engineering-collaboration', rules)
+        fixture = eval_tool.fixture('M04', 'maintenance-v1')
+        self.assertEqual(fixture['.aitasks/todo.md'].count('status=completed'), 19)
+        self.assertIn('last_cleanup_at', fixture['.aitasks/.maintenance.json'])
+        self.assertTrue(eval_tool.is_readonly('M05'))
+        args = SimpleNamespace(codex='codex', external_skills=[], model=None)
+        command = eval_tool.command_for(args, Path('/tmp'), Path('/tmp/last.txt'), 'M02')
+        self.assertNotIn('--ephemeral', command)
+
+    def test_maintenance_probe_requires_second_occurrence_and_single_lesson(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, content in eval_tool.fixture('M02', 'maintenance-v1').items():
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+            before = eval_tool.snapshot(root)
+            lesson = '<!-- aitasks:lesson id=00000000000040008000000000000001 created_at=2026-09-22 last_used_at=- use_count=0 pinned=false -->\n## 日期时区\n保留 offset。\n'
+            (root / '.aitasks/lessons.md').write_text('# 经验\n' + lesson)
+            early = eval_tool.snapshot(root)
+            self.assertEqual(eval_tool.maintenance_check('M02', root, before, early)['status'], 'fail')
+            self.assertEqual(eval_tool.maintenance_check('M02', root, before, before)['status'], 'pass')
+            (root / '.aitasks/lessons.md').write_text('# 经验\n' + lesson + lesson)
+            self.assertEqual(eval_tool.maintenance_check('M02', root, before, before)['status'], 'fail')
+
+    def test_maintenance_probe_checks_archive_before_removal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, content in eval_tool.fixture('M04', 'maintenance-v1').items():
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
+            (root / 'labels.py').write_text('def format_label(name, value):\n    return f"{name} {value}"\n')
+            todo = root / '.aitasks/todo.md'
+            old = todo.read_text()
+            first = old.index('<!-- aitasks:todo ')
+            second = old.index('<!-- aitasks:todo ', first + 1)
+            archived = old[first:second]
+            archive = root / '.aitasks/archive/todo-2026-09-22.md'
+            archive.parent.mkdir()
+            archive.write_text('<!-- archived_at=2026-09-22 source=todo.md -->\n' + archived)
+            todo.write_text(old[:first] + old[second:] + '\n<!-- aitasks:todo id=00000000000040008000000000000020 created_at=2026-09-22 status=completed completed_at=2026-09-22 -->\n## 修改分隔符\n\n验证通过。\n')
+            self.assertEqual(eval_tool.maintenance_check('M04', root)['status'], 'pass')
+            archive.write_text('<!-- archived_at=2026-09-22 source=todo.md -->\n')
+            self.assertEqual(eval_tool.maintenance_check('M04', root)['status'], 'fail')
+
     def test_legacy_fixture_is_not_rewritten(self):
         self.assertIn('与序列化无关', eval_tool.fixture('06')['.aitasks/lessons.md'])
         self.assertIn('timezone offset', eval_tool.fixture('07')['.aitasks/lessons.md'])

@@ -1,4 +1,4 @@
 interface:
   display_name: ".aitasks 维护"
-  short_description: "按需维护任务、经验和归档，普通只读查询不启动维护流程"
-  default_prompt: "使用 $aitasks-maintenance 在当前授权范围内维护需要更新的任务、经验或归档记录。"
+  short_description: "代码编辑自动记 todo；重复问题记经验；记录过量自动归档"
+  default_prompt: "使用 $aitasks-maintenance 自动记录当前代码编辑任务的 todo，沉淀重复问题，并按阈值归档。"

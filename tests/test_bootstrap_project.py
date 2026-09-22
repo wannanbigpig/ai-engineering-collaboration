@@ -42,6 +42,8 @@ class BootstrapProjectTest(unittest.TestCase):
             agents_after_first = (target / "AGENTS.md").read_text(encoding="utf-8")
             self.assertIn("# Existing project rules", agents_after_first)
             self.assertEqual(agents_after_first.count("ai-engineering-collaboration:begin"), 1)
+            self.assertIn("Only with a usable `.codegraph/` index", agents_after_first)
+            self.assertIn("never run `codegraph init` automatically", agents_after_first)
             self.assertIn(".aitasks/", (target / ".gitignore").read_text(encoding="utf-8"))
 
             second = self.run_script("--target", str(target))
@@ -83,6 +85,13 @@ class BootstrapProjectTest(unittest.TestCase):
         self.assertIn("# Engineering defaults", result.stdout)
         self.assertIn("使用中文回复", result.stdout)
 
+        documentation = (REPOSITORY_ROOT / "docs" / "project-bootstrap.md").read_text(
+            encoding="utf-8"
+        )
+        custom_section = documentation.split("## Codex Custom Instructions", 1)[1]
+        documented_instructions = custom_section.split("```md\n", 1)[1].split("\n```", 1)[0]
+        self.assertEqual(result.stdout.strip(), documented_instructions.strip())
+
     def test_generated_guidance_scopes_orchestration_and_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             target = Path(temporary_directory) / "project"
@@ -95,11 +104,16 @@ class BootstrapProjectTest(unittest.TestCase):
             self.assertEqual(custom.returncode, 0, custom.stderr)
             agents = (target / "AGENTS.md").read_text(encoding="utf-8")
             self.assertIn("needs coordination across multiple specialist stages", agents)
+            self.assertIn("For every project-code editing task, use `aitasks-maintenance`", agents)
+            self.assertIn("Record a lesson immediately when the user explicitly asks", agents)
             self.assertNotIn("For non-trivial engineering work", agents)
-            self.assertIn("任务需要跨多个专项阶段统筹", custom.stdout)
+            self.assertIn("确需跨多个专项阶段统筹", custom.stdout)
+            self.assertIn("编辑项目代码时，不论是否使用入口 Skill", custom.stdout)
+            self.assertIn("用户明确要求记录经验时立即记录", custom.stdout)
+            self.assertIn("`AGENTS.override.md`", custom.stdout)
             self.assertNotIn("对非平凡工程任务", custom.stdout)
-            self.assertIn("覆盖风险的最小验证", custom.stdout)
-            self.assertIn("纯文档或注释修改不默认运行无关测试", custom.stdout)
+            self.assertIn("按风险执行最小必要验证", custom.stdout)
+            self.assertIn("不为纯文档变更运行无关测试", custom.stdout)
 
     def test_user_scope_installs_only_skills_under_home(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -297,6 +311,36 @@ class BootstrapProjectTest(unittest.TestCase):
             self.assertIn("differs from the source Skill", result.stderr)
             self.assertFalse((target / "AGENTS.md").exists())
             self.assertFalse((target / ".gitignore").exists())
+
+    def test_dangling_skill_link_is_a_preflight_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            target = Path(temporary_directory) / "project"
+            skills = target / ".agents" / "skills"
+            skills.mkdir(parents=True)
+            dangling = skills / "aitasks-maintenance"
+            dangling.symlink_to("missing-skill")
+
+            result = self.run_script("--target", str(target))
+
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("exists but is not a directory", result.stderr)
+            self.assertTrue(dangling.is_symlink())
+            self.assertEqual(list(skills.iterdir()), [dangling])
+            self.assertFalse((target / "AGENTS.md").exists())
+
+    def test_dangling_skills_directory_fails_before_other_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            target = Path(temporary_directory) / "project"
+            agents = target / ".agents"
+            agents.mkdir(parents=True)
+            (agents / "skills").symlink_to("missing-skills")
+
+            result = self.run_script("--target", str(target))
+
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("Expected a directory", result.stderr)
+            self.assertEqual(list(agents.iterdir()), [agents / "skills"])
+            self.assertFalse((target / "AGENTS.md").exists())
 
 
 if __name__ == "__main__":

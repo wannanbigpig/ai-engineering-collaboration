@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -16,6 +20,10 @@ MARKER = (
     "<!-- aitasks:lesson created_at=2026-09-15 "
     "last_used_at=- use_count=0 pinned=false -->\n"
 )
+SPEC = importlib.util.spec_from_file_location("maintain_aitasks", SCRIPT)
+maintenance = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = maintenance
+SPEC.loader.exec_module(maintenance)
 
 
 class MaintainAitasksTest(unittest.TestCase):
@@ -27,7 +35,9 @@ class MaintainAitasksTest(unittest.TestCase):
         self.aitasks.mkdir()
         self.lessons = self.aitasks / "lessons.md"
 
-    def run_script(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+    def run_script(
+        self, *arguments: str, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
                 sys.executable,
@@ -41,6 +51,7 @@ class MaintainAitasksTest(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
+            env=env,
         )
 
     def find(self, query: str, *arguments: str) -> str:
@@ -225,6 +236,23 @@ class MaintainAitasksTest(unittest.TestCase):
         self.assertIn("## Old tracked", archived)
         self.assertNotIn("Legacy", archived)
 
+    def test_cleanup_ignores_example_marker_inside_fenced_lesson(self) -> None:
+        original = (
+            MARKER + "## Real lesson\nMetadata example:\n\n```md\n"
+            + MARKER.replace("2026-09-15", "2020-01-01")
+            + "## Example marker\n```\nEssential tail.\n\n"
+            + "    " + MARKER.replace("2026-09-15", "2020-01-01")
+            + "    ## Indented example\n"
+        )
+        self.lessons.write_text(original, encoding="utf-8")
+
+        result = self.run_script("cleanup", "--force", "--apply")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Tracked records: 1 lessons", result.stdout)
+        self.assertEqual(self.lessons.read_text(encoding="utf-8"), original)
+        self.assertFalse((self.aitasks / "archive").exists())
+
     def test_cleanup_without_expired_records_updates_check_state_without_archive(self) -> None:
         original = MARKER + "## Recent\nbody\n"
         self.lessons.write_text(original, encoding="utf-8")
@@ -250,6 +278,270 @@ class MaintainAitasksTest(unittest.TestCase):
         status = self.run_script("status")
         self.assertEqual(status.returncode, 0, status.stderr)
         self.assertIn("Maintenance not due.", status.stdout)
+
+    def test_count_trigger_archives_recent_completed_todos_before_age_limit(self) -> None:
+        todo_path = self.aitasks / "todo.md"
+        todo_path.write_text(
+            "<!-- aitasks:todo created_at=2026-09-01 status=completed completed_at=2026-09-10 -->\n"
+            "## Old completed\nbody\n\n"
+            "<!-- aitasks:todo created_at=2026-09-02 status=completed completed_at=2026-09-11 -->\n"
+            "## New completed\nbody\n\n"
+            "<!-- aitasks:todo created_at=2026-09-03 status=active completed_at=- -->\n"
+            "## Active\nbody\n",
+            encoding="utf-8",
+        )
+
+        preview = self.run_script("cleanup", "--todo-count-trigger", "2")
+        self.assertIn("Eligible for archive: 0 lessons, 1 todos", preview.stdout)
+        self.assertIn("- todo: Old completed", preview.stdout)
+        self.assertIn("Old completed", todo_path.read_text(encoding="utf-8"))
+
+        applied = self.run_script("cleanup", "--todo-count-trigger", "2", "--apply")
+        self.assertEqual(applied.returncode, 0, applied.stderr)
+        self.assertNotIn("Old completed", todo_path.read_text(encoding="utf-8"))
+        self.assertIn("New completed", todo_path.read_text(encoding="utf-8"))
+        self.assertIn("Active", todo_path.read_text(encoding="utf-8"))
+        archive = next((self.aitasks / "archive").glob("todo-*.md"))
+        self.assertIn("Old completed", archive.read_text(encoding="utf-8"))
+
+    def test_count_trigger_prefers_unused_lessons_and_preserves_pinned(self) -> None:
+        self.lessons.write_text(
+            "<!-- aitasks:lesson created_at=2026-09-01 last_used_at=- use_count=2 pinned=true -->\n"
+            "## Pinned\nbody\n\n"
+            "<!-- aitasks:lesson created_at=2026-09-02 last_used_at=2026-09-10 use_count=2 pinned=false -->\n"
+            "## Used\nbody\n\n"
+            "<!-- aitasks:lesson created_at=2026-09-03 last_used_at=- use_count=0 pinned=false -->\n"
+            "## Unused\nbody\n",
+            encoding="utf-8",
+        )
+
+        preview = self.run_script("cleanup", "--lesson-count-trigger", "3")
+        self.assertIn("Eligible for archive: 1 lessons, 0 todos", preview.stdout)
+        self.assertIn("- lesson: Unused", preview.stdout)
+        applied = self.run_script("cleanup", "--lesson-count-trigger", "3", "--apply")
+        self.assertEqual(applied.returncode, 0, applied.stderr)
+        current = self.lessons.read_text(encoding="utf-8")
+        self.assertIn("Pinned", current)
+        self.assertIn("Used", current)
+        self.assertNotIn("Unused", current)
+        archive = next((self.aitasks / "archive").glob("lessons-*.md"))
+        self.assertIn("Unused", archive.read_text(encoding="utf-8"))
+
+    def test_cleanup_rejects_colliding_legacy_ids_without_removing_records(self) -> None:
+        marker = MARKER.replace("2026-09-15", "2020-01-01")
+        original = marker + "## Same title\nfirst body\n\n" + marker + "## Same title\nsecond body\n"
+        self.lessons.write_text(original, encoding="utf-8")
+
+        result = self.run_script("cleanup", "--force", "--apply")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ID collision", result.stderr)
+        self.assertEqual(self.lessons.read_text(encoding="utf-8"), original)
+        self.assertFalse((self.aitasks / "archive").exists())
+        self.assertFalse((self.aitasks / ".maintenance.json").exists())
+
+    def test_cleanup_rejects_duplicate_records_even_when_bodies_match(self) -> None:
+        record = MARKER.replace("2026-09-15", "2020-01-01") + "## Same title\nsame body\n\n"
+        original = record + record
+        self.lessons.write_text(original, encoding="utf-8")
+
+        result = self.run_script("cleanup", "--force", "--apply")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ID collision", result.stderr)
+        self.assertEqual(self.lessons.read_text(encoding="utf-8"), original)
+        self.assertFalse((self.aitasks / "archive").exists())
+
+    def test_cleanup_archives_same_title_and_date_with_unique_ids(self) -> None:
+        marker = MARKER.replace("2026-09-15", "2020-01-01")
+        self.lessons.write_text(
+            marker.replace(" -->", " id=unique-first -->") + "## Same title\nfirst body\n\n"
+            + marker.replace(" -->", " id=unique-second -->") + "## Same title\nsecond body\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_script("cleanup", "--force", "--apply")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        archive = next((self.aitasks / "archive").glob("lessons-*.md"))
+        archived = archive.read_text(encoding="utf-8")
+        self.assertIn("first body", archived)
+        self.assertIn("second body", archived)
+
+    def test_cleanup_rejects_changed_record_with_existing_archive_id(self) -> None:
+        marker = MARKER.replace("2026-09-15", "2020-01-01").replace(
+            " -->", " id=shared-id -->"
+        )
+        original = marker + "## Same title\nnew body\n"
+        archive_text = (
+            "# Archived lessons records\n\n"
+            "<!-- archived_at=2026-09-14 source=lessons.md -->\n\n"
+            + marker + "## Same title\nold body\n"
+        )
+        self.lessons.write_text(original, encoding="utf-8")
+        archive_dir = self.aitasks / "archive"
+        archive_dir.mkdir()
+        archive_path = archive_dir / "lessons-2026-09-14.md"
+        archive_path.write_text(archive_text, encoding="utf-8")
+
+        result = self.run_script("cleanup", "--force", "--apply")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("ID collision", result.stderr)
+        self.assertEqual(self.lessons.read_text(encoding="utf-8"), original)
+        self.assertEqual(archive_path.read_text(encoding="utf-8"), archive_text)
+
+    def test_cleanup_recovers_when_identical_record_is_already_archived(self) -> None:
+        marker = MARKER.replace("2026-09-15", "2020-01-01").replace(
+            " -->", " id=shared-id -->"
+        )
+        original = marker + "## Same title\nsame body\n"
+        self.lessons.write_text(original, encoding="utf-8")
+        archive_dir = self.aitasks / "archive"
+        archive_dir.mkdir()
+        archive_path = archive_dir / "lessons-2026-09-14.md"
+        archive_text = (
+            "# Archived lessons records\n\n"
+            "<!-- archived_at=2026-09-14 source=lessons.md -->\n\n"
+            + original
+        )
+        archive_path.write_text(archive_text, encoding="utf-8")
+
+        result = self.run_script("cleanup", "--force", "--apply")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.lessons.read_text(encoding="utf-8"), "")
+        self.assertEqual(archive_path.read_text(encoding="utf-8"), archive_text)
+
+    def test_archive_reader_ignores_example_marker_inside_fenced_body(self) -> None:
+        marker = MARKER.replace("2026-09-15", "2020-01-01")
+        archived = (
+            "# Archived lessons records\n\n"
+            "<!-- archived_at=2026-09-14 source=lessons.md -->\n\n"
+            + marker.replace(" -->", " id=archived -->")
+            + "## Archived\nExample:\n```md\n"
+            + marker.replace(" -->", " id=shared -->")
+            + "## Example marker\n```\nPreserved tail.\n"
+        )
+        current = marker.replace(" -->", " id=shared -->") + "## Actual lesson\nbody\n"
+        self.lessons.write_text(current, encoding="utf-8")
+        archive_dir = self.aitasks / "archive"
+        archive_dir.mkdir()
+        archive_path = archive_dir / "lessons-2026-09-14.md"
+        archive_path.write_text(archived, encoding="utf-8")
+
+        result = self.run_script("cleanup", "--force", "--apply")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.lessons.read_text(encoding="utf-8"), "")
+        self.assertEqual(archive_path.read_text(encoding="utf-8"), archived)
+        self.assertIn(
+            "## Actual lesson",
+            (archive_dir / "lessons-2026-09-15.md").read_text(encoding="utf-8"),
+        )
+
+    def test_cleanup_does_not_ignore_unreadable_archive_entry(self) -> None:
+        original = MARKER.replace("2026-09-15", "2020-01-01") + "## Old\nbody\n"
+        self.lessons.write_text(original, encoding="utf-8")
+        archive_dir = self.aitasks / "archive"
+        archive_dir.mkdir()
+        (archive_dir / "lessons-unreadable.md").mkdir()
+
+        result = self.run_script("cleanup", "--force", "--apply")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cleanup aborted before writing", result.stderr)
+        self.assertEqual(self.lessons.read_text(encoding="utf-8"), original)
+        self.assertFalse((self.aitasks / ".maintenance.json").exists())
+
+    def test_live_process_lock_is_not_reclaimed_for_old_mtime(self) -> None:
+        lock_path = self.aitasks / ".maintenance.lock"
+        lock_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+        old_time = time.time() - 3600
+        os.utime(lock_path, (old_time, old_time))
+
+        result = self.run_script(
+            "cleanup", "--force", "--apply",
+            env={**os.environ, "AITASKS_LOCK_TIMEOUT": "0.02"},
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("another maintenance process holds", result.stderr)
+        self.assertEqual(lock_path.read_text(encoding="utf-8"), f"{os.getpid()}\n")
+
+    def test_fresh_incomplete_lock_is_not_reclaimed(self) -> None:
+        lock_path = self.aitasks / ".maintenance.lock"
+        lock_path.write_text("", encoding="utf-8")
+
+        result = self.run_script(
+            "cleanup", "--force", "--apply",
+            env={**os.environ, "AITASKS_LOCK_TIMEOUT": "0.02"},
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("another maintenance process holds", result.stderr)
+        self.assertTrue(lock_path.exists())
+
+    def test_lock_release_preserves_a_replacement_owned_by_another_process(self) -> None:
+        lock_path = self.aitasks / ".maintenance.lock"
+        lock = maintenance.MaintenanceLock(lock_path)
+
+        with lock:
+            lock_path.unlink()
+            lock_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+
+        self.assertTrue(lock_path.exists())
+
+    def test_stale_lock_reclaim_does_not_remove_a_new_owner(self) -> None:
+        lock_path = self.aitasks / ".maintenance.lock"
+        lock_path.write_text("999999999\n", encoding="utf-8")
+        first = maintenance.MaintenanceLock(lock_path, timeout=2, sleep_interval=0.005)
+        second = maintenance.MaintenanceLock(lock_path, timeout=2, sleep_interval=0.005)
+        stale_checked = threading.Event()
+        resume_first = threading.Event()
+        first_entered = threading.Event()
+        second_entered = threading.Event()
+        release_first = threading.Event()
+        errors: list[BaseException] = []
+        original_is_stale = first.is_stale
+
+        def pause_after_stale_check() -> bool:
+            stale = original_is_stale()
+            stale_checked.set()
+            if not resume_first.wait(2):
+                raise TimeoutError("first contender did not resume")
+            return stale
+
+        first.is_stale = pause_after_stale_check
+
+        def acquire(lock: maintenance.MaintenanceLock, entered: threading.Event) -> None:
+            try:
+                with lock:
+                    entered.set()
+                    if lock is first and not release_first.wait(2):
+                        raise TimeoutError("first owner was not released")
+            except BaseException as error:
+                errors.append(error)
+
+        first_thread = threading.Thread(target=acquire, args=(first, first_entered))
+        second_thread = threading.Thread(target=acquire, args=(second, second_entered))
+        first_thread.start()
+        try:
+            self.assertTrue(stale_checked.wait(2))
+            second_thread.start()
+            self.assertFalse(second_entered.wait(0.05))
+            resume_first.set()
+            self.assertTrue(first_entered.wait(2))
+            self.assertFalse(second_entered.is_set())
+            release_first.set()
+            self.assertTrue(second_entered.wait(2))
+        finally:
+            resume_first.set()
+            release_first.set()
+            first_thread.join(2)
+            if second_thread.ident is not None:
+                second_thread.join(2)
+        self.assertEqual(errors, [])
 
 
 if __name__ == "__main__":

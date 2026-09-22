@@ -51,9 +51,19 @@ python3 evals/behavior_eval.py report --output .aitasks/evaluations/1.6.0/full
 
 第 04 组包含三个真实轮次：首次测试、输入未变的收尾、由 Harness 修改相关实现后请求修复。它使用新建的持久 CLI 会话并按精确 `thread_id` 继续；不会使用 `--last`。其他 11 组使用 `--ephemeral`。因此 72 个场景实例会包含额外会话轮次。持久 CLI 会话仅第 04 组会由 CLI 正常保存，脚本不清理或覆盖已有会话。
 
+`maintenance-v1` 是独立的五组自动维护对照，不修改上述历史场景。M01 检查不指定入口的代码编辑仍完成一条 todo；M02 在同一持久会话两次实质提出问题，第一次不记录、第二次沉淀一条经验；M03 首次明确要求即记录；M04 从 19 条近期已完成 todo 起步，完成本任务后达到 20 条容量阈值，检查先归档最旧记录再移出活动文件；M05 显式只读，检查所有文件保持不变。它们在项目 `AGENTS.md` 中提供自动维护规则，但不指定工程入口。行为结果仍需人工复核实际 Skill 加载、记录内容和无关操作；本地规则触发的表现不能外推到未安装或未配置该规则的项目。
+
+```bash
+python3 evals/behavior_eval.py list --suite maintenance-v1
+python3 evals/behavior_eval.py run --suite maintenance-v1 \
+  --baseline /absolute/path/to/frozen-baseline \
+  --candidate /absolute/path/to/frozen-candidate \
+  --output /absolute/path/to/new-output --repetitions 1
+```
+
 ## Skill 加载和环境边界
 
-每个 fixture 复制被测版本的全部 `skills/` 到本地 `.agents/skills/`，`AGENTS.md` 指定本次入口及本地版本优先。它测试**指定入口之后的工作流行为**，不是原生 Skill 自动触发准确率评测。不能据此宣称 description 的自动触发改进已经测得。
+每个 fixture 复制被测版本的全部 `skills/` 到本地 `.agents/skills/`。固定入口套件的 `AGENTS.md` 指定入口；自然套件不指定入口，`maintenance-v1` 只提供项目级维护规则。前者不能证明原生 Skill 自动触发准确率，后者也不能证明缺少项目规则时的自动触发或其他 Harness 的表现。
 
 脚本枚举 `~/.agents/skills`、`~/.codex/skills`、`/etc/codex/skills` 下的 `SKILL.md`，通过单次 `skills.config=[{path="...",enabled=false}]` 覆盖禁用外部目录，记录完整路径清单，不改磁盘配置；字段依据见[官方配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)。插件、其他安装位置、父目录或用户规则仍需核实；[同名 Skill 不会自动合并](https://learn.chatgpt.com/docs/build-skills)，不能假定项目版自动覆盖用户版。
 

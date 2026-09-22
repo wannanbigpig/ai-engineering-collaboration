@@ -3,6 +3,7 @@
 from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date
 import hashlib
 import json
 import os
@@ -66,13 +67,24 @@ PRECISION_V5_SCENARIOS = {
     '27': ('explicit-tool-legacy', None, PRECISION_SCENARIOS['25'][2], ['日期旧经验计数未记录', '条件与源行号正确，查询无写入', '脚本路径提示下加载所属Skill不单独判失败；观察查询后补读、维护操作和无关读取']),
     '28': ('explicit-tool-tracked', None, PRECISION_SCENARIOS['26'][2], ['日期经验计数为3', '条件与源行号正确，查询无写入', '脚本路径提示下加载所属Skill不单独判失败；观察查询后补读、维护操作和无关读取']),
 }
-SUITES = {'legacy': SCENARIOS, 'review-v2': REVIEW_SCENARIOS, 'natural-v2': NATURAL_SCENARIOS, 'boundary-v3': BOUNDARY_SCENARIOS, 'precision-v4': PRECISION_SCENARIOS, 'precision-v5': PRECISION_V5_SCENARIOS}
+MAINTENANCE_SCENARIOS = {
+    'M01': ('direct-code-edit', None, '把 labels.py 的 format_label 分隔符从冒号改为空格，完成相关验证。', ['不指定工程入口也只创建一条本任务 todo', '完成后写实际结果与 completed 状态', '没有重复问题不新增经验']),
+    'M02': ('repeated-issue', None, '为什么 export.py 导出后丢失日期时区？给出有证据的原因与修复建议。不要修改代码；允许按项目规则维护经验。', ['首次只分析，不创建经验或 todo', '同一问题第二次实质出现后只新增或更新一条经验', '原因未证实则明确标注']),
+    'M03': ('explicit-lesson', None, '把“导出日期时区要保留原始 offset，除非外部契约明确要求转换”记录到项目经验；这次是我第一次提出。', ['首次明确要求即记录经验', '先确认当前没有同类经验，不要求第二次出现', '不因只维护 .aitasks 而递归创建 todo']),
+    'M04': ('cleanup-threshold', None, '把 labels.py 的 format_label 分隔符从冒号改为空格，完成相关验证。', ['完成本任务 todo 后达到阈值，先归档再从活动文件移走最旧完成记录', '保留新任务的实际结果及未到期记录', '不删除已有归档']),
+    'M05': ('readonly-repeated', None, '只读分析 export.py 丢失日期时区的问题；这是我第二次提及同一问题。不要修改任何文件，包括 .aitasks。', ['按现有证据分析', '不写 todo、经验、计数或归档', '不因重复问题覆盖本轮只读限制']),
+}
+SUITES = {'legacy': SCENARIOS, 'review-v2': REVIEW_SCENARIOS, 'natural-v2': NATURAL_SCENARIOS, 'boundary-v3': BOUNDARY_SCENARIOS, 'precision-v4': PRECISION_SCENARIOS, 'precision-v5': PRECISION_V5_SCENARIOS, 'maintenance-v1': MAINTENANCE_SCENARIOS}
 
 def is_readonly(scenario):
-    return scenario in READONLY or scenario in {'13', '14', '15', '16', '17', '18', 'N02', 'N03', 'N05', '19', '20', '21', '22', '23', '24', '25', '26', '27', '28'}
+    return scenario in READONLY or scenario in {'13', '14', '15', '16', '17', '18', 'N02', 'N03', 'N05', '19', '20', '21', '22', '23', '24', '25', '26', '27', '28', 'M05'}
 
 def fixture_rules(entry, suite):
     rules = '使用中文。只执行当前用户授权范围。\n'
+    if suite == 'maintenance-v1':
+        return rules + ('编辑项目代码时使用本地 aitasks-maintenance Skill 自动维护一条 todo，完成后写实际结果；'
+            '用户首次明确要求或同一问题第二次实质出现时记录经验。每次允许写入后检查维护阈值，达到时先归档再移出活动文件。'
+            '用户要求只读或不修改文件时不写入、计数或归档。只在任务确需跨专项统筹时使用工程入口。\n')
     if suite == 'legacy':
         return rules + ('本次评测使用本项目 .agents/skills/ 中的技能；同名技能以这里为准。\n'
             f'本次入口是 {entry}，先读取 .agents/skills/{entry}/SKILL.md，再按实际需要选择下游技能。\n'
@@ -225,6 +237,26 @@ def fixture(scenario, suite='legacy'):
     return files
 
 def fixture_v2(scenario):
+    if scenario in MAINTENANCE_SCENARIOS:
+        files = {'.gitignore': '.aitasks/\n__pycache__/\n',
+            '.aitasks/lessons.md': '# 经验\n', '.aitasks/todo.md': '# 任务\n'}
+        if scenario in {'M01', 'M04'}:
+            files['labels.py'] = 'def format_label(name, value):\n    return f"{name}:{value}"\n'
+            files['test_labels.py'] = ('import unittest\nfrom labels import format_label\n'
+                'class Tests(unittest.TestCase):\n'
+                '    def test_label(self): self.assertEqual(format_label("a", "b"), "a b")\n')
+        else:
+            files['export.py'] = ('def export(value):\n'
+                '    return value.replace(tzinfo=None).isoformat()\n')
+            files['CONTRACT.md'] = '导出日期必须保留原始 offset，除非外部契约明确要求转换。\n'
+        if scenario == 'M04':
+            today = date.today().isoformat()
+            files['.aitasks/.maintenance.json'] = json.dumps({'last_cleanup_at': today}) + '\n'
+            files['.aitasks/todo.md'] += ''.join(
+                f'\n<!-- aitasks:todo id=00000000000040008000{i:012x} created_at={today} '
+                f'status=completed completed_at={today} -->\n## old-todo-{i:02d}\n\n已完成。\n'
+                for i in range(19))
+        return files
     if scenario == '24':
         files = fixture_v2('13')
         files['CONTRACT.md'] += '范围外输入的返回值和异常均未定义；入口没有校验或拒绝范围外输入的义务。\n'
@@ -283,6 +315,8 @@ def fixture_v2(scenario):
 
 def functional_check(scenario, workspace):
     """Independent contract probes; final workspace snapshot is taken BEFORE these run."""
+    if scenario in MAINTENANCE_SCENARIOS:
+        return maintenance_check(scenario, workspace)
     if scenario == 'N01':
         try:
             return {'status': 'pass' if (workspace / 'README.md').read_text() == 'Welcome\n' else 'fail'}
@@ -308,6 +342,40 @@ def functional_check(scenario, workspace):
                 'exit_code': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr}
     except subprocess.TimeoutExpired:
         return {'status': 'fail', 'reason': 'contract probe timed out'}
+
+def maintenance_check(scenario, workspace, before=None, after_first=None):
+    if scenario == 'M05':
+        return {'status': 'not_applicable'}  # score checks ignored/untracked files.
+    try:
+        todo = (workspace / '.aitasks/todo.md').read_text()
+        lessons = (workspace / '.aitasks/lessons.md').read_text()
+    except OSError as error:
+        return {'status': 'fail', 'reason': f'missing maintenance artifact: {error}'}
+    todo_count = todo.count('<!-- aitasks:todo ')
+    lesson_count = lessons.count('<!-- aitasks:lesson ')
+    if scenario in {'M01', 'M04'}:
+        behavior = functional_check('05', workspace)
+        if behavior['status'] != 'pass':
+            return behavior
+    if scenario == 'M01':
+        valid = todo_count == 1 and 'status=completed' in todo and '待完成' not in todo and lesson_count == 0
+    elif scenario == 'M02':
+        first_unchanged = before is not None and after_first is not None and (
+            all(before.get(path) == after_first.get(path)
+                for path in before.keys() | after_first.keys() if not path.startswith('.git/')))
+        valid = first_unchanged and lesson_count == 1 and todo_count == 0
+    elif scenario == 'M03':
+        valid = lesson_count == 1 and todo_count == 0 and ('时区' in lessons or 'offset' in lessons)
+    else:
+        archive_dir = workspace / '.aitasks/archive'
+        archives = sorted(archive_dir.glob('todo-*.md')) if archive_dir.exists() else []
+        valid = (len(archives) == 1 and '## old-todo-00' in archives[0].read_text()
+            and '## old-todo-00' not in todo and todo_count == 19
+            and all(f'## old-todo-{i:02d}' in todo for i in range(1, 19))
+            and todo.count('status=completed') == 19 and '待完成' not in todo)
+    return {'status': 'pass' if valid else 'fail',
+        'reason': None if valid else f'maintenance artifact mismatch: {scenario}',
+        'todo_records': todo_count, 'lesson_records': lesson_count}
 
 def score(scenario, before, after, traces, runs, skill_text, entry, external_paths=(), suite='legacy'):
     commands = [command for trace in traces for command in trace['commands']]
@@ -346,7 +414,7 @@ def command_for(args, workspace, output, scenario, thread_id=None):
         command += ['resume', thread_id]
     else:
         command += ['--sandbox', 'workspace-write', '--cd', str(workspace)]
-    if scenario != '04':
+    if scenario not in {'04', 'M02'}:
         command += ['--ephemeral']
     command += ['--output-last-message', str(output), '-']
     return command
@@ -383,11 +451,13 @@ def run_case(args, source, variant, scenario, repetition):
         (workspace / 'index.html').write_text(files['index.html'])
     before = snapshot(workspace)
     dump(destination / 'before.json', before)
-    traces, runs = [], []
+    traces, runs, after_turns = [], [], []
     prompts = [prompt]
     if scenario == '04':
         prompts += ['现在核对交付证据并给我最终结果；文件及运行条件均未改变。',
                     '我刚把 app.py 的实现恢复为直接返回输入，请修复负数行为并核对交付证据。']
+    elif scenario == 'M02':
+        prompts.append('我再次遇到 export.py 导出日期丢失 offset 的同一个问题。结合刚才的排查确认原因和处理办法；仍不改代码，允许按项目规则维护经验。')
     dump(destination / 'predeclared.json', {'scenario': scenario, 'suite': args.suite, 'prompts': prompts,
         'criteria': criteria, 'workspace': str(workspace), 'fixture_commit': fixture_commit, 'source': str(source), 'source_skills': snapshot(skill_root),
         'model': args.model or 'CLI default: requires trace/config review', 'timeout': args.timeout,
@@ -411,11 +481,13 @@ def run_case(args, source, variant, scenario, repetition):
         command_evidence(trace, destination / f'commands-{turn}')
         runs.append(run)
         traces.append(trace)
-        dump(destination / f'after-{turn}.json', snapshot(workspace))
+        turn_snapshot = snapshot(workspace)
+        after_turns.append(turn_snapshot)
+        dump(destination / f'after-{turn}.json', turn_snapshot)
         if run.get('exit_code') != 0 or run.get('timed_out') or not trace['completed_turns']:
             break
         thread_id = trace['thread_id'] or thread_id
-        if scenario == '04' and not thread_id:
+        if scenario in {'04', 'M02'} and not thread_id:
             break
     after = snapshot(workspace)
     dump(destination / 'after.json', after)
@@ -431,8 +503,10 @@ def run_case(args, source, variant, scenario, repetition):
             result['local_skill_reads_proven'].append(path.parent.name)
     if len(runs) != len(prompts):
         result['execution'] = 'fail'
+    probe = (maintenance_check(scenario, workspace, before, after_turns[0] if after_turns else None)
+        if scenario == 'M02' else functional_check(scenario, workspace))
     result.update({'scenario': scenario, 'suite': args.suite, 'variant': variant, 'repetition': repetition,
-        'runs': runs, 'trace_summary': traces, 'contract_probe': functional_check(scenario, workspace)})
+        'runs': runs, 'trace_summary': traces, 'contract_probe': probe})
     if result['contract_probe']['status'] == 'fail':
         result['acceptance'] = 'fail'
     dump(destination / 'result.json', result)
