@@ -3,6 +3,7 @@ import copy
 from contextlib import redirect_stdout
 import io
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -117,6 +118,8 @@ class BehaviorEvaluationTests(unittest.TestCase):
     def test_cli_schedules_three_controls_and_preserves_source_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            empty_path = root/'empty-bin'
+            empty_path.mkdir()
             for name in ('baseline', 'candidate'):
                 (root/name/'skills').mkdir(parents=True)
             scheduled = []
@@ -125,9 +128,11 @@ class BehaviorEvaluationTests(unittest.TestCase):
                 return {'execution': 'completed'}
             command = ['behavior_eval.py', 'run', '--suite', 'selection-v1', '--scenarios', 'S01',
                        '--baseline', str(root/'baseline'), '--candidate', str(root/'candidate'),
-                       '--output', str(root/'out'), '--include-no-skill', '--repetitions', '2']
+                       '--output', str(root/'out'), '--include-no-skill', '--repetitions', '2',
+                       '--codex', sys.executable]
             with patch.object(sys, 'argv', command), patch.object(eval_tool, 'run_case', side_effect=run_case), \
-                 patch.object(eval_tool, 'discover_external_skills', return_value=[]), redirect_stdout(io.StringIO()):
+                 patch.object(eval_tool, 'discover_external_skills', return_value=[]), \
+                 patch.dict(os.environ, {'PATH': str(empty_path)}), redirect_stdout(io.StringIO()):
                 eval_tool.main()
             self.assertEqual([row[1] for row in scheduled], ['baseline', 'candidate', 'no-skill', 'no-skill', 'candidate', 'baseline'])
             self.assertTrue(all(source is None for source, variant, _, _ in scheduled if variant == 'no-skill'))
