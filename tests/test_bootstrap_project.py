@@ -738,12 +738,10 @@ class BootstrapProjectTest(unittest.TestCase):
         self.assertIn("`codegraph status`", result.stdout)
         self.assertIn("不自动执行 `codegraph init`", result.stdout)
 
-        documentation = (REPOSITORY_ROOT / "docs" / "project-bootstrap.md").read_text(
-            encoding="utf-8"
-        )
-        custom_section = documentation.split("## Codex Custom Instructions", 1)[1]
+        documentation = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+        custom_section = documentation.split("### 推荐自定义规则", 1)[1]
         documented_instructions = custom_section.split("```md\n", 1)[1].split("\n```", 1)[0]
-        self.assertEqual(result.stdout.strip(), documented_instructions.strip())
+        self.assertEqual(result.stdout.rstrip("\n"), documented_instructions.rstrip("\n"))
 
     def test_prints_custom_instructions_then_installs_user_skills(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -2,7 +2,7 @@
 
 一组面向真实工程任务的可组合 Agent Skills。单一明确任务直接处理或使用对应专项；需要跨多个专项阶段时，再使用 `ai-engineering-collaboration` 统筹。
 
-当前源码版本：[1.7.14](VERSION)，共 11 个 Skill。源码版本、已安装副本和当前会话实际加载的版本分别核对。
+当前源码版本：[1.7.15](VERSION)，共 11 个 Skill。源码版本、已安装副本和当前会话实际加载的版本分别核对。
 
 ## 从任务开始
 
@@ -26,6 +26,8 @@
 ```text
 请使用 frontend-ui-ux 改善这个后台列表的视觉层级和操作体验，保留现有功能。
 ```
+
+前端 Skill 会把页面骨架、视觉规格和交互落实到可运行页面，再检查实际渲染与主流程；开源参考和取舍见[研究说明](docs/frontend-skill-research.md)，实际运行与验证边界见[落地评测](evals/reports/1.7.15-frontend-implementation.md)。
 
 明确局部改字或解释代码不必加载专项。只读评估不会自动转为修复；实施授权在范围内跨阶段继承。技能选择与执行是否正确需要真实场景验证，不能仅凭安装成功判断。
 
@@ -62,18 +64,62 @@ python3 -B scripts/bootstrap_project.py --target /absolute/path/to/project --dry
 
 ## 配合项目规则与 Custom Instructions
 
+Custom Instructions 用来固定跨项目协作底线：减少重复提醒、重复确认、无关流程和无依据的验证声明，并统一任务记录与只读边界。它定义“如何协作”；项目规则定义“这个项目如何工作”，Skill 再提供按需执行的方法。
+
 | 层级 | 负责内容 |
 | --- | --- |
-| 客户端 Custom Instructions | 中文回复、授权边界、何时记录任务等跨项目底线 |
-| 项目 `AGENTS.md`、`AGENTS.override.md`、`CLAUDE.md` | 技术栈、契约、验证命令及部署约束；更具体路径规则优先 |
+| 个人全局规则 / 客户端 Custom Instructions | 回复语言、授权延续、调查与验证原则、任务和经验的记录边界 |
+| 项目 `AGENTS.md`、`CLAUDE.md`、`GEMINI.md` 等 | 技术栈、业务契约、测试命令、部署约束及目录差异 |
 | 按需 Skill | 审查、调试、实施或维护的具体工作流 |
 
+### 不同工具放在哪里
+
+以下是 **2026-11-06 按官方文档核对的默认入口**；`~` 表示用户主目录，`<project>` 表示当前项目或 Workspace。只需要单个项目生效时，合并到项目规则文件；跨项目复用时，选择该工具支持的个人全局入口。保留已有规则，不整份覆盖。
+
+| 工具 | 个人全局规则 | 项目规则 | 官方说明 |
+| --- | --- | --- | --- |
+| Codex（本地） | `~/.codex/AGENTS.md`；自定义 `CODEX_HOME` 时用 `$CODEX_HOME/AGENTS.md` | `<project>/AGENTS.md`，适用子目录可用 `AGENTS.override.md` | [AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md) |
+| Claude Code | `~/.claude/CLAUDE.md` | `<project>/CLAUDE.md` 或 `<project>/.claude/CLAUDE.md` | [Memory](https://code.claude.com/docs/en/memory) |
+| Gemini CLI | `~/.gemini/GEMINI.md` | `<project>/GEMINI.md`；文件名可配置 | [Context files](https://geminicli.com/docs/cli/gemini-md/) |
+| OpenCode | `~/.config/opencode/AGENTS.md` | `<project>/AGENTS.md` 及适用目录规则 | [V1](https://opencode.ai/docs/rules/)、[V2](https://opencode.ai/v2/docs/instructions/) |
+| Cursor 编辑器 | 设置中的 **User Rules** | `<project>/AGENTS.md` 或 `<project>/.cursor/rules/*.mdc` | [Rules](https://cursor.com/docs/rules) |
+| ZCode | `~/.zcode/AGENTS.md` | 当前 Workspace 根目录的 `AGENTS.md` | [项目指令](https://zcode.z.ai/cn/docs/agents) |
+
+`~/.agents/skills/` 是 Skill 目录，不能据此推断 `~/.agents/AGENTS.md` 会被这些工具自动读取。若把后者作为个人共享源，需要显式引用，或连接到各工具支持的原生规则入口；仅把文件放在那里不会建立通用的全局规则。
+
+- **复用项目规则**：Claude Code 可在根 `CLAUDE.md` 中写 `@AGENTS.md`；Gemini 可在根 `GEMINI.md` 中写 `@./AGENTS.md`，或按[安装说明](docs/project-bootstrap.md#各-agent-工具的发现方式)配置 `context.fileName`。选择一种引入方式，避免重复加载。
+- **Codex 覆盖优先级**：同目录存在非空 `AGENTS.override.md` 时，优先于 `AGENTS.md`；全局目录取自 `CODEX_HOME`，未设置时才是 `~/.codex`。
+- **发现规则有版本差异**：Claude Code v2.1.277+ 已有条件原生读取项目 `AGENTS.md`；OpenCode V1/V2 的 `CLAUDE.md` 兼容规则不同。ZCode 只拼接全局与当前 Workspace 两份，不自动遍历多层目录。以表中对应版本文档为准。
+- **核对生效**：合并规则后刷新或新开会话，核对实际加载来源。安装 Skill 不会自动写入这些全局文件或客户端设置；规则存在也不等于所有客户端已加载。
+
+### 推荐自定义规则
+
+下面只保留常驻底线，专项细节交给 Skill；项目规则补充本项目差异。使用任务/经验记录规则时，需要让 `aitasks-maintenance` 可被当前客户端发现。
+
+```md
+# Engineering defaults
+
+- 使用中文回复；代码、命令、文件名、错误日志和 API 名称保持原文。
+- 修改前读取并遵守当前工具及任务路径适用的规则，如 `AGENTS.md`、`AGENTS.override.md`、`CLAUDE.md`、`GEMINI.md`；更具体路径规则优先。
+- 在已授权范围内持续推进，切换阶段或 Skill 不重复请求授权。只询问无法从现有证据推导、且会改变交付的关键决策；只暂停依赖答案的部分，超出已有授权的动作先确认。
+- 项目有 `.aitasks/` 时，在任务开始、范围变化或新根因确认后，按模块、符号或错误码查询相关经验与 todo。优先用只读工具取有界摘要，必要时按 ID 读单条；工具不可用时只定位少量标题与元数据，无法核实的正文及适用性标为未验证，不临时编写经验解析器。不默认整篇加载或更新计数；本会话复用未变结果，新会话重新查询。
+- 只核对会改变结论或交付的关键前提；保持独立判断，区分已验证事实、推断与未验证项。时效性或高风险结论优先查证，实质分歧说明依据和风险。
+- 先调查相关实现、约束及工作区已有改动；Bug 确定根因后做当前任务所需的最小修复，保留无关修改。沿用既有工具、设施和风格；校验、兜底、兼容分支与抽象须有具体依据，保留必要的权限、事务、并发与幂等保障；生成物修改源定义后再生成。
+- 修改后按风险执行最小必要验证；复用相关输入和环境未变的有效结果，不为纯文档变更运行无关测试。未经验证不得宣称通过，无法验证时说明边界。
+- 单一明确工程任务直接处理或使用对应专项 Skill；确需跨多个专项阶段统筹，或用户明确指定时，使用 `ai-engineering-collaboration`，不机械串联全部流程。
+- 编辑项目代码时，不论是否使用入口 Skill，都用 `aitasks-maintenance` 创建或复用本任务的一条 todo，完成后写入实际结果并更新状态；仅维护 `.aitasks` 不递归创建 todo。
+- 用户明确要求记录经验时立即记录，未证实原因标为“未确认”；否则只观察已验证且可复用的问题，二次独立任务确认同因后再沉淀。先检索同类记录并复用原 ID，实际采用经验解决问题后才计数，查询不算复用。
+- 只读或明确不修改文件时，不改项目文件，也不写观察、todo、经验、计数、忽略规则或归档。允许写入 todo 或经验后按维护规则检查阈值；达到时先归档再移出，不自动删除归档，工具已检查则不重复执行。
+- 项目根目录有 `.codegraph/` 且索引可用时，理解未知结构、调用链或改动影响优先用 CodeGraph MCP；MCP 不可用且 CLI 可用时改用 CLI，首次使用先运行 `codegraph status`。已知路径或简单文本直接检索，图谱不足时回退常规工具，关键结论核对代码与测试，不自动执行 `codegraph init`。
+```
+
+也可在本仓库根目录打印同一份文本，再合并到所选规则文件或客户端设置：
+
 ```bash
-# 只打印待粘贴文本，不修改客户端配置
 python3 -B scripts/bootstrap_project.py --print-custom-instructions
 ```
 
-将输出放入客户端对应的全局指令设置，再开新会话验证。`npx skills` 不会替你写入 Custom Instructions；无需克隆的用户也可从[完整工程默认指令](docs/project-bootstrap.md#codex-custom-instructions)复制。项目初始化只更新 `AGENTS.md` 的受管区块，保留其他项目约定。
+该命令只输出文本，不修改个人配置。`npx skills` 也不会代写全局指令；`bootstrap --target` 只更新项目 `AGENTS.md` 的受管区块，保留其他约定。
 
 ## 工作原则
 

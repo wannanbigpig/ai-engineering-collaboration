@@ -1,4 +1,4 @@
 interface:
   display_name: "前端界面设计与体验"
-  short_description: "围绕产品场景评估和改善视觉布局与交互，兼顾可用性、现有规范和实现维护"
-  default_prompt: "使用 $frontend-ui-ux 评估、设计或改善当前界面的视觉、布局与交互，并核对受影响体验。"
+  short_description: "把界面设计落实为可运行页面、所需交互和真实渲染复查，保留现有功能与规范"
+  default_prompt: "使用 $frontend-ui-ux 完成本次界面设计或优化；需要实施时交付可运行页面，并检查主流程和渲染结果。"
