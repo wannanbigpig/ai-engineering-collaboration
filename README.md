@@ -1,210 +1,112 @@
 # AI Engineering Collaboration Skills
 
-一组面向真实工程任务的可组合 Agent Skills。单一明确工作流可直接使用对应专项；`ai-engineering-collaboration` 只统筹确需跨多个专项阶段的任务。
+一组面向真实工程任务的可组合 Agent Skills。单一明确任务直接处理或使用对应专项；需要跨多个专项阶段时，再使用 `ai-engineering-collaboration` 统筹。
 
-当前仓库版本：[1.7.4](VERSION)。仓库内全部 10 个 Skill 使用同一版本号；本地版本号不代表已发布或已更新用户级安装。
+当前源码版本：[1.7.12](VERSION)，共 11 个 Skill。源码版本、已安装副本和当前会话实际加载的版本分别核对。
 
-## 适合解决什么
+## 从任务开始
 
-- 已有方案需要在最新代码上分步实施。
-- 本地 Bug、测试、构建、性能或集成问题需要定位根因。
-- 跨模块、数据流、权限或契约改动需要先评估影响。
-- 需要需求定界、测试先行、CI 归因、代码审查或发布前验证。
+| 你要做什么 | 可使用的 Skill |
+| --- | --- |
+| 审查代码、核实审查反馈 | `code-review` |
+| 排查根因未明的本地问题 / 远程 CI 失败 | `systematic-debugging` / `ci-triage` |
+| 按已有方案实施 | `plan-execution` |
+| 收敛关键需求 / 分析共享影响 | `requirements-framing` / `change-impact-analysis` |
+| 选择回归测试策略 / 补足交付证据 | `test-driven-change` / `verification-gate` |
+| 设计或改善界面视觉、布局与交互 | `frontend-ui-ux` |
+| 维护任务、经验及归档 | `aitasks-maintenance` |
+| 协调多个必要阶段 | `ai-engineering-collaboration` |
 
-它不是代码生成框架、MCP Server 或项目规则的替代品。项目中的 `AGENTS.md`、`AGENTS.override.md`、`CLAUDE.md` 仍优先于 Skill 指令。
-
-## 安装
-
-三种方式按**安装范围**选择，通常选一种即可：
-
-| 目标 | 方式 | 前置条件 | 写入范围 |
-| --- | --- | --- | --- |
-| 不克隆仓库，快速安装 | [`npx skills`](#方式一npx-安装不克隆) | Node.js | 由 `skills` CLI 与当前 Harness 的交互/参数决定 |
-| 当前用户全量安装 | [`bootstrap --scope user`](#方式二用户级脚本安装) | 克隆本仓库、Python 3.9+ | `~/.agents/skills/`，以及 Claude Code、Gemini、ZCode 的兼容软链接 |
-| 初始化单个项目 | [`bootstrap --target …`](#方式三项目级脚本安装) | 克隆本仓库、Python 3.9+ | 项目的 `.agents/skills/`、兼容软链接、`AGENTS.md` 受管区块，并按条件更新 `.gitignore` |
-
-- **`npx skills`**：走开源 [skills](https://github.com/vercel-labs/skills) CLI，不克隆本仓库也能装；适合只要 Skill、或已习惯该生态的用户。安装目录、是否建 symlink、覆盖哪些 Agent 由 CLI 决定。
-- **`bootstrap_project.py`**：本仓库自带脚本，写入位置固定、可 `--dry-run` 预览，适合需要 `.agents/skills/` 单副本 + 多工具软链接、或同时改 `AGENTS.md` 的场景。
-
-### 方式一：npx 安装（不克隆）
-
-```bash
-# 列出本仓库可安装的 Skill（不写入）
-npx skills@latest add wannanbigpig/ai-engineering-collaboration --list
-
-# 全部 10 个 Skill → 当前项目（CLI 默认项目作用域，会提示确认 Agent）
-npx skills@latest add wannanbigpig/ai-engineering-collaboration --all
-
-# 全部 10 个 Skill → 用户级全局，跳过交互
-npx skills@latest add wannanbigpig/ai-engineering-collaboration --all --global --yes
-
-# 只装入口 + 部分专项，并指定 Agent（可多个）
-npx skills@latest add wannanbigpig/ai-engineering-collaboration \
-  --skill ai-engineering-collaboration code-review verification-gate \
-  --agent claude-code codex --yes
-
-# 不安装，先看某个 Skill 的用途（生成提示词）
-npx skills@latest use wannanbigpig/ai-engineering-collaboration --skill code-review
-```
-
-常用后续命令：
-
-```bash
-npx skills@latest list --global          # 查看已安装
-npx skills@latest update --global --yes  # 升级已装 Skill
-npx skills@latest remove --global --all  # 卸载由 skills CLI 装入的内容
-```
-
-说明：
-
-- `--all` 等价于 `--skill '*' --agent '*' --yes`：全部 Skill 装到 CLI 检测到的全部 Agent。
-- **项目作用域**写入各 Agent 的项目目录（如 `.claude/skills/`、`.agents/skills/` 等）；**`--global`** 写入对应 `~/…/skills/`。具体路径见 [skills CLI 文档](https://github.com/vercel-labs/skills)。
-- 默认多用 symlink 指向一份规范副本；不支持 symlink 时可加 `--copy`。
-- 安装不等于授予额外权限：装完后请打开 `SKILL.md` 及其 `references/`、脚本做必要审查。
-- 该 CLI 的升级/卸载与本仓库 `bootstrap_project.py` 互不感知；若两边装到同一路径且内容不同，可能需先手动清理再装。
-
-### 方式二：用户级脚本安装
-
-将完整 10 个 Skill 装到当前用户，并为常见工具建兼容软链接；**不修改任何项目文件**：
-
-```bash
-# 预览
-python3 scripts/bootstrap_project.py --scope user --dry-run
-
-# 安装
-python3 scripts/bootstrap_project.py --scope user
-
-# 可选：先打印 Custom Instructions，再装 Skills（指令仍需手动粘贴到 Codex）
-python3 scripts/bootstrap_project.py --scope user --print-custom-instructions
-```
-
-写入范围：`~/.agents/skills/`，以及 `~/.claude/skills/`、`~/.gemini/skills/`、`~/.zcode/skills/` 的相对软链接。Codex、OpenCode、Cursor 本地版直接发现 `~/.agents/skills/`。
-
-### 方式三：项目级脚本安装
-
-在仓库根目录，把 Skills 初始化进另一个项目：
-
-```bash
-# 预览
-python3 scripts/bootstrap_project.py --target /absolute/path/to/project --dry-run
-
-# 安装
-python3 scripts/bootstrap_project.py --target /absolute/path/to/project
-
-# 需要将 .aitasks/ 纳入版本控制时
-python3 scripts/bootstrap_project.py --target /absolute/path/to/project --track-aitasks
-```
-
-除复制 Skills 与兼容链接外，还会：只维护 `AGENTS.md` 中受管标记区块；默认向 `.gitignore` 添加 `.aitasks/`（已跟踪或历史上曾删除该规则时跳过并说明原因）。
-
-脚本**不会**覆盖内容不同的同名 Skill（不是自动升级器）；冲突会在写入前以非零退出停止。完整写入边界、Gemini `context.fileName`、安装验证命令见 [项目初始化与 Custom Instructions](docs/project-bootstrap.md)。
-
-### 安装后
-
-1. **重启或刷新** Agent 会话，使 Skill 生效。
-2. **可选但推荐**：配合 Custom Instructions（见下节），把跨项目工程底线粘贴到客户端设置。
-3. **确认可发现**：在会话中显式点名入口或某个专项（见下方「使用」）；文件存在不等于 Harness 已加载。
-
-## 使用
-
-任务确需跨多个专项阶段时，明确调用入口：
+安装后，在新会话中显式调用，例如：
 
 ```text
-请使用 ai-engineering-collaboration 处理这个任务：
-<任务描述>
+请使用 code-review 只读审查当前改动，给出有证据的问题与建议。
 ```
 
-入口会按剩余缺口选择必要专项；单一明确任务直接处理或使用对应专项 Skill。只安装入口也可以使用，但缺少的专项 Skill 无法被加载，入口只能采用通用最小流程。
-
-仓库提供标准 `SKILL.md`，并为 Codex 提供可选的 `agents/openai.yaml` UI 元数据；其他 Harness 可忽略该文件。
-
-### 配合 Custom Instructions
-
-Skill 与客户端 **Custom Instructions**、项目 **`AGENTS.md`** 是三层互补，不是三选一：
-
-| 层级 | 作用域 | 内容侧重 | 典型载体 |
-| --- | --- | --- | --- |
-| Custom Instructions | 当前客户端账户 / 全局会话 | 跨项目都要生效的短底线：中文回复、规则优先级、何时用入口、何时记 todo/经验 | Codex 等设置里的 Custom Instructions |
-| 项目规则 | 单个仓库 | 技术栈、测试命令、领域与部署约束；更具体路径规则优先 | `AGENTS.md` / `AGENTS.override.md` / `CLAUDE.md` |
-| Skill | 按任务触发或显式点名 | 完整工作流与边界（审查格式、调试步骤、维护 CLI 等） | 已安装的 `skills/*/SKILL.md` |
-
-**分工要点**：
-
-- **Custom Instructions** 负责「默认怎么干活、什么时候想起用哪个 Skill」；不要把某个 Skill 的长流程整段贴进去，细节留给 `SKILL.md`。
-- **项目 `AGENTS.md`** 负责仓库私有约束。入口与 Custom Instructions 都要求：适用的项目规则优先于 Skill 指令；更具体路径规则优先。
-- **Skill** 在任务命中或用户点名时加载；只装 Custom Instructions、不装 Skill，只会得到底线，没有专项流程。
-
-**怎么拿到并粘贴指令**：
-
-```bash
-# 仅打印文本（需能运行本仓库脚本；可先克隆仓库）
-python3 scripts/bootstrap_project.py --print-custom-instructions
-
-# 打印指令，并同时做用户级 Skill 安装（粘贴仍须你手动完成）
-python3 scripts/bootstrap_project.py --scope user --print-custom-instructions
+```text
+请使用 frontend-ui-ux 改善这个后台列表的视觉层级和操作体验，保留现有功能。
 ```
 
-1. 将输出整段粘贴到 Codex：**Settings → Custom Instructions**（或其他客户端对应的全局指令入口）。
-2. 保存后**开新会话或刷新**，确认指令已生效。
-3. 再按上文任一方式安装 Skill，并点名验证入口可加载。
+明确局部改字或解释代码不必加载专项。只读评估不会自动转为修复；实施授权在范围内跨阶段继承。技能选择与执行是否正确需要真实场景验证，不能仅凭安装成功判断。
 
-未克隆仓库、只用 `npx skills` 的用户：Custom Instructions **不会**随 `npx` 写入客户端设置。可先临时克隆本仓库执行上述 `--print-custom-instructions`，或从 [docs/project-bootstrap.md](docs/project-bootstrap.md) 中的 `# Engineering defaults` 全文复制后粘贴；Skill 仍用 `npx` 安装即可。
+## 安装范围
 
-脚本**不会**自动改写 Codex 设置或全局 `AGENTS.md`，只负责打印。项目级 `--target` 额外把受管工程区块写进目标项目的 `AGENTS.md`，与账户级 Custom Instructions 叠加使用：全局底线进指令，仓库细节进 `AGENTS.md`。完整说明见 [项目初始化与 Custom Instructions](docs/project-bootstrap.md)。
+通常选择一种方式，避免不同安装器管理同一路径：
 
-## 工作方式
-
-1. **先确认约束**：读取与目标路径相关的项目规则和经验；初次实现目标模块时建立局部风格基线并复用已有证据。已知文件和简单字面关系直接检索；项目有可用 `.codegraph/` 索引时，结构和跨模块关系优先用 CodeGraph MCP，MCP 不可用再用 CLI，均不可用则回退常规检索。
-2. **再推进任务**：只有无法从事实推导的关键需求才询问，可合并独立问题；明确的修复授权跨阶段继承。入口按协作需要选择，非平凡实施按风险形成最小计划，已有会话或文件计划可复用。编辑项目代码时自动记录一条任务 todo；用户明确要求记录经验时立即记录，否则同一问题第二次实质出现时自动沉淀；记录达到阈值时自动归档清理。只读任务不写记录、计数或忽略规则。
-3. **以证据收尾**：核对相关状态，只重读变化或缺失的内容；非预期失败才重估，预期失败测试属于正常验证。未变化的代码、依赖、配置和环境对应的通过结果可复用；验证默认使用检查模式，按风险补缺口。
-4. **复核结构质量**：修改前建立一次风格基线，修改后核对一次结构，专项复用证据。函数长度只作为信号，拆分需权衡内聚性与人工导航成本；质量指标只报告实际测量。交付格式遵循用户要求，审查先列问题，简短结果可合并栏目。
-
-## Skill 目录
-
-| 类别 | Skill | 作用 |
+| 目标 | 方式 | 前置条件与写入范围 |
 | --- | --- | --- |
-| 跨阶段入口 | `ai-engineering-collaboration` | 只统筹需要多个专项协同的工程任务 |
-| 定界与实施 | `requirements-framing`、`plan-execution`、`test-driven-change` | 收敛关键决策、按方案实施、建立测试闭环 |
-| 分析与诊断 | `change-impact-analysis`、`systematic-debugging`、`ci-triage` | 评估影响、定位本地根因、归因远程 CI |
-| 质量 | `code-review`、`verification-gate` | 代码审查、收到反馈后的事实核验和交付证据检查 |
-| 任务治理 | `aitasks-maintenance` | 维护 todo、经验和归档；带可选 Python 标准库 CLI |
-
-每个 Skill 都可独立安装，相关 `references/`、`assets/` 和可选脚本随其目录分发。跨阶段入口的完整协作能力需要所有专项 Skill 同时可被当前 Harness 发现。
-
-## 仓库结构
-
-```text
-skills/       # 10 个可独立分发的 Skill
-evals/        # 跨 Harness 的行为评测场景与评分规则
-docs/         # 可重复验证说明
-VERSION       # 唯一发布版本来源
-CHANGELOG.md  # 发布记录
-```
-
-## 本地验证
+| 安装选定技能和客户端 | [skills CLI](docs/project-bootstrap.md#通过-skills-cli-安装) | 示例固定 `skills@1.7.6`，要求 Node.js ≥22.20.0；目录由作用域及 Agent 参数决定 |
+| 当前用户安装全部技能 | `bootstrap --scope user` | Python 3.9+；写入 `~/.agents/skills/` 和兼容软链接 |
+| 初始化单个项目 | `bootstrap --target …` | Python 3.9+；管理项目技能、兼容入口、`AGENTS.md` 受管区块，并按条件更新 `.gitignore` |
 
 ```bash
-release=$(tr -d '\r\n' < VERSION)
-test -n "$release"
+# 不克隆仓库：先查看，再安装指定技能到当前项目的 Codex
+npx skills@1.7.6 add wannanbigpig/ai-engineering-collaboration --list
+npx skills@1.7.6 add wannanbigpig/ai-engineering-collaboration --skill code-review --agent codex
 
-for skill in skills/*; do
-  test "$(sed -n 's/^  version: //p' "$skill/SKILL.md")" = "$release"
-  uvx --from 'skills-ref==0.1.1' agentskills validate "$skill"
-done
+# 已克隆本仓库：预览用户级完整安装；核对输出后去掉 --dry-run
+python3 -B scripts/bootstrap_project.py --scope user --dry-run
 
-python3 -m unittest discover -s tests -v
-
-git diff --check
+# 或预览单个项目初始化
+python3 -B scripts/bootstrap_project.py --target /absolute/path/to/project --dry-run
 ```
 
-`.aitasks` CLI 的 smoke test、[可维护性行为评测](evals/maintainability-scenarios.md)、[工作流边界评测](evals/workflow-boundaries.md)和[成对行为运行器](evals/behavior-evaluation.md)的验证边界见 [docs/verification.md](docs/verification.md)。安装任何第三方 Skill 前，应审查其 `SKILL.md`、脚本、引用资源和配置文件；安装不等于授予额外权限。
+脚本默认拒绝覆盖不同的同名 Skill，已有定制须先核对；检查及基线升级见[安装说明](docs/project-bootstrap.md#检查与显式升级)。`skills` CLI 与 bootstrap 不互相接管安装所有权。卸载应限定本仓库来源或明确的 Skill 名，不使用全局 `remove --all`。
 
-本次审查风险与检索范围收敛见 [1.6.4 验收结果](evals/reports/1.6.4.md)；查询和取证改进见 [1.6.3](evals/reports/1.6.3.md)，更早记录见 [1.6.2](evals/reports/1.6.2.md)、[1.6.1](evals/reports/1.6.1.md) 和 [1.6.0](evals/reports/1.6.0.md)。
+每个 Skill 的本地资源随自身目录分发。只读经验查询可发现已安装的 `aitasks-maintenance` 并读取其短参考；未安装时定向读取少量有效记录，不要求兄弟目录存在。使用本仓库工程入口编辑代码或配置下述工程默认指令时，需要让 `aitasks-maintenance` 可被当前客户端发现；其他专项可按需安装。
 
-## 发布与贡献
+安装后刷新或重启会话，点名核对技能是否可发现。`agents/openai.yaml` 是可选 Codex UI 元数据，其他 Harness 可忽略；兼容状态见[验证说明](docs/verification.md#兼容与生效矩阵)。
 
-发布时递增 `VERSION`，同步更新全部 Skill 的 `metadata.version`，并更新 [CHANGELOG.md](CHANGELOG.md)。贡献约定见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+## 配合项目规则与 Custom Instructions
 
-## 许可证
+| 层级 | 负责内容 |
+| --- | --- |
+| 客户端 Custom Instructions | 中文回复、授权边界、何时记录任务等跨项目底线 |
+| 项目 `AGENTS.md`、`AGENTS.override.md`、`CLAUDE.md` | 技术栈、契约、验证命令及部署约束；更具体路径规则优先 |
+| 按需 Skill | 审查、调试、实施或维护的具体工作流 |
 
-[MIT](LICENSE)
+```bash
+# 只打印待粘贴文本，不修改客户端配置
+python3 -B scripts/bootstrap_project.py --print-custom-instructions
+```
+
+将输出放入客户端对应的全局指令设置，再开新会话验证。`npx skills` 不会替你写入 Custom Instructions；无需克隆的用户也可从[完整工程默认指令](docs/project-bootstrap.md#codex-custom-instructions)复制。项目初始化只更新 `AGENTS.md` 的受管区块，保留其他项目约定。
+
+## 工作原则
+
+- 从相关规则、实现和当前工作区开始，保护已有改动；经验只是线索，关键事实核对当前代码与契约。
+- 只询问无法推导且会改变结果的决策，按剩余证据缺口选择专项，复用已有授权与有效验证。
+- 代码编辑一任务一条 todo；只读查询不写记录、观察或计数。已确认且可复用的问题按独立任务观察，二次出现再沉淀；用户明确要求记录时立即执行。
+- 复用相邻实现与共享设施；校验、兼容分支、抽象和测试均以实际行为或风险为依据。前端设计围绕产品任务，验证实际受影响页面与交互。
+- 按风险做必要验证，区分工具测试、真实 Agent 行为与人工复核；不把命令数量或字符预算直接换算成质量或 token 收益。
+
+职责与可选依赖约定见[Skill 契约](docs/skill-contracts.md)。
+
+## 验证与分发
+
+```bash
+# 版本、独立包资源、官方结构校验、差异检查和全部单测；必要步骤失败即非零退出
+python3 -B scripts/validate_repository.py --tests
+
+# 离线时只跳过官方结构校验，输出会明确标为未运行
+python3 -B scripts/validate_repository.py --offline
+
+# 只读检查安装状态；JSON 不代表当前会话已加载
+python3 -B scripts/bootstrap_project.py --scope user --check --json
+
+# 生成独立 ZIP 与内容清单；不上传，拒绝覆盖非空目录
+python3 -B scripts/package_skills.py --output /absolute/path/to/new-release-directory
+```
+
+本地脚本、CI 矩阵和真实行为验收的边界见[验证说明](docs/verification.md)。最新优化、测试方法对照与实际失败见 [1.7.12 报告](evals/reports/1.7.12.md)，历史记忆结果见 [1.7.10 报告](evals/reports/1.7.10-memory-workflow.md)；运行方法见[行为评测](evals/behavior-evaluation.md)。报告中的失败和未验证项保留，不能将静态通过当作自然触发或视觉效果通过。
+
+```text
+skills/       # 可独立安装的技能、资源与可选脚本
+scripts/      # 安装、仓库校验与分发工具
+evals/        # 行为场景、运行器与验收报告
+tests/        # 工具和契约回归测试
+docs/         # 安装、职责、兼容与验证说明
+VERSION       # 统一源码版本
+```
+
+贡献与版本规则见 [CONTRIBUTING.md](CONTRIBUTING.md)，发布变化见 [CHANGELOG.md](CHANGELOG.md)。采用 [MIT](LICENSE) 许可证。

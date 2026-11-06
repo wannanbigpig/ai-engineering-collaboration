@@ -4,12 +4,14 @@ description: "排查根因未明的本地 Bug、测试或构建失败、性能�
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.4
+  version: 1.7.12
 ---
 
 # 系统化调试
 
 针对本地 Bug、测试/构建失败、性能异常、集成问题和非预期行为排查根因。以下步骤按证据缺口选择，不是固定流水线；当前证据已确认根因时直接进入最小修复与复验。
+
+项目有 `.aitasks/` 时，从当前可发现的 Skill 中定位可选的 `aitasks-maintenance`，存在才读取其目录内的 `references/query.md`，取相关经验与 todo，不加载维护流程或假定相邻安装。未安装或工具不可用时，按关键词取少量命中记录及所属元数据，排除 `retired` / `superseded`；旧记录缺少状态仅作有效线索。经验须与当前失败证据核对。
 
 ## 流程
 

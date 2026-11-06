@@ -4,9 +4,16 @@
 
 ## 运行
 
-需要 Python 3、Git 和已登录的 Codex CLI；进程组超时清理使用 POSIX 接口，面向 macOS/Linux，Windows 适配未验证。本工具依据 `codex 0.147.0` 的本地 `exec --help` / `exec resume --help` 实现；其他 CLI 版本必须先检查参数支持。脚本不安装 Skill、不修改用户配置、不提交当前项目、不发布文件。
+需要 Python 3、Git 和已登录的 Codex CLI；进程组超时清理使用 POSIX 接口，面向 macOS/Linux，Windows 适配未验证。本工具最初依据 `codex 0.147.0` 实现，`0.163.0` / `0.164.0` 实测见 [1.7.9 记忆试验](reports/1.7.9-memory-pilot.md)；其他 CLI 版本必须先检查参数支持。脚本不安装 Skill、不修改用户配置、不提交当前项目、不发布文件。
 
 先冻结包括未跟踪文件在内的基线和候选，二者至少包含 `skills/`。输出目录应位于临时目录或项目已忽略的 `.aitasks/` 下；每次使用新输出目录，已有场景目录会报错，失败记录不会被重试覆盖。
+
+冻结完整 Skill 目录，不用“改动文件列表”代替源包；未改动的模板、引用和 Agent 元数据同样影响行为。命令保留完整资源并生成哈希清单，已有目标拒绝覆盖；`memory-v1` 启动前另核对维护脚本和两份记录模板。
+
+```bash
+python3 evals/behavior_eval.py freeze --source /absolute/path/to/source \
+  --output /absolute/path/to/new-frozen-source
+```
 
 ```bash
 python3 evals/behavior_eval.py list
@@ -67,9 +74,26 @@ python3 evals/behavior_eval.py run --suite maintenance-v1 \
 
 每个 fixture 复制被测版本的全部 `skills/` 到本地 `.agents/skills/`。固定入口套件的 `AGENTS.md` 指定入口；自然套件不指定入口，`maintenance-v1` 只提供项目级维护规则。前者不能证明原生 Skill 自动触发准确率，后者也不能证明缺少项目规则时的自动触发或其他 Harness 的表现。
 
-脚本枚举 `~/.agents/skills`、`~/.codex/skills`、`/etc/codex/skills` 下的 `SKILL.md`，通过单次 `skills.config=[{path="...",enabled=false}]` 覆盖禁用外部目录，记录完整路径清单，不改磁盘配置；字段依据见[官方配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)。插件、其他安装位置、父目录或用户规则仍需核实；[同名 Skill 不会自动合并](https://learn.chatgpt.com/docs/build-skills)，不能假定项目版自动覆盖用户版。
+脚本枚举 `~/.agents/skills`、`~/.codex/skills`、`~/.codex/plugins/cache`、`/etc/codex/skills` 下的 `SKILL.md`，通过单次 `skills.config=[{path="/absolute/path/SKILL.md",enabled=false}]` 禁用外部 Skill，记录完整文件清单，不改磁盘配置。`0.163.0` 的本机 prompt 审计发现目录路径无效，改为文件路径后只剩十个项目 Skill，与[官方 Skill 配置示例](https://learn.chatgpt.com/docs/build-skills)一致。其他安装位置、插件工具、父目录或用户规则仍需核实；同名 Skill 不会自动合并，不能假定项目版自动覆盖用户版。
 
-只有完成的成功命令明确读取目标路径，且轨迹输出含目标 `SKILL.md` 全文，才记 `target_skill_read_proven=true`。仅路径提及、部分输出或工具输出不可见时记 false，并保留人工复核，不据此断言一定未加载。禁用清单和“没观察到外部读取”也不能单独证明隐式上下文完全隔离。
+`memory-v1` 是两组有项目记忆规则、未指定入口的真实任务试验：R01 修复零值配置，具体经验位于归档，活动区只有泛化弱匹配；R02 只读审查重试契约，旧经验明确标为已替代。两组均带无关记录，分别检查召回、实际单条读取、任务正确性与只读边界。固定规则不提供命令、答案或评分标准；未使用查询工具也保留为自然选择结果，不能用工具直调代替行为通过。
+
+```bash
+python3 evals/behavior_eval.py run --suite memory-v1 \
+  --baseline /absolute/path/to/frozen-baseline \
+  --candidate /absolute/path/to/frozen-candidate \
+  --output /absolute/path/to/new-output --repetitions 1
+```
+
+一次试验只用于发现问题。正式验收仍需相同 CLI、模型及配置的独立重复，保留失败样本；CLI 中途更新或网络失败时单列并重新配对，不覆盖原结果。
+
+`memory-v2` 保留 R02 的原始审查任务，另增加 R03 跨会话重复问题：第一条任务修复 CSV 日期导出，完成后只允许一条观察；Harness 随后追加存在相同缺陷的 JSON 导出函数及测试，以第二个全新 CLI 会话请求修复。第二次会话不 resume，不获得第一条聊天记录，只能读取项目持久材料。项目规则向两版提供同一观察/沉淀约定，用户请求不提供 key、复用要求或预期经验。
+
+R03 独立探针核对两个导出契约、首次不写正式经验、跨会话沿用一个观察签名、两个独立任务 ID 和一条关联经验；语义同因、经验内容及不必要读取仍需轨迹复核。`memory-after-1/` 保存第一条任务结束时的完整记忆目录，位于执行工作区祖先链之外。R02 可做三次独立配对；R03 的一次实例包含两次独立 CLI 会话。
+
+两次会话身份都存在且不同才证明新会话；任一 `thread_id` 缺失时，记忆探针与组合探针保留 `unverified`，同一 ID 则失败。文件状态正确不能填补身份事件缺口，也不回写历史结果。
+
+只有完成的成功命令明确读取当前实例的本地路径，且轨迹输出含目标 `SKILL.md` 全文，才记 `target_skill_read_proven=true`。自动判定仅接受单条 `cat` 读取工作区绝对路径（允许简单 shell 包装）；现有 CLI 命令事件没有每条命令的工作目录，不能依据启动时的目录推断相对路径，因此相对路径、复合命令、其他读取方式、路径重定向到工作区外、部分输出或工具输出不可见时记 false 并保留人工复核，不据此断言一定未加载。`external_skill_reads_observed` 只提示命令中提及外部路径，仍需核实是否真的读取。禁用清单和“没观察到外部读取”也不能单独证明隐式上下文完全隔离。
 
 ## 证据和评分
 
@@ -79,6 +103,7 @@ python3 evals/behavior_eval.py run --suite maintenance-v1 \
 - `prompt-N.txt`、`command-N.json`、`trace-N.jsonl`、`stderr-N.log`、`final-N.txt`：原始执行证据。
 - `before.json`、`after.json` 及每轮快照：全部文件内容哈希、权限与符号链接，包含 ignored/untracked 文件。
 - `result.json`：运行状态、命令摘要、目标读取证据、文件变化和独立契约探针。
+- `runner-error.json`：运行器异常导致实例无法产出结果时，尽可能保存异常类型和原因；原始材料仍保留。
 - 顶层 `summary.json`：所有已保存实例汇总。
 
 执行工作区位于独立临时父目录下，评分标准、其他实例和输出文件不放在其祖先目录。运行后完整工作区复制到实例输出目录的 `workspace/` 供复核；原始临时路径记录在 `predeclared.json` 中并保留，便于会话续接和失败调查。维护者核对后可手动清理这些明确由本工具创建的临时目录。
@@ -86,6 +111,8 @@ python3 evals/behavior_eval.py run --suite maintenance-v1 \
 每个 fixture 先建立临时 Git commit。第 12 组提交旧文案后生成新文案 diff。Git 作者和签名选项仅用于这些临时 fixture，不修改全局配置。
 
 自动评分只断言能够直接证明的事实：进程是否完成、输出是否完整可读、哪些文件变化、独立契约断言是否通过。只读任务中 `.git/` 元数据变化单列复核，避免将合法检查刷新 index 机械判成源码写入；`.gitignore` 和被忽略的 `.aitasks/` 仍严格检查。独立契约探针在最终工作区快照之后运行，避免混淆执行者变化与评分者变化。
+
+汇总同时列出已创建但缺少 `result.json` 的实例：有结构化异常时为 `runner_error`，否则为 `incomplete`；两者均不计为完成。已有结果和证据不会被重试覆盖，旧结果不自动回写；若写入异常文件本身失败，保留控制台错误，实例仍会按 `incomplete` 列出。
 
 **自动结果不产生语义“通过”。** 每个实例必须另附人工判断，逐项填写“通过 / 失败 / 证据不足”、证据文件和行号。至少复核：
 
@@ -105,6 +132,93 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p test_behavior
 ```
 
 单元测试覆盖 ignored/untracked 快照、符号链接、JSONL 完成与失败、超时保留、加载证据边界、只读越界和独立契约反例。它们检验评测工具，不替代上述真实行为验收。
+
+## 自然触发、无技能对照与保留集
+
+`selection-v1` 的项目规则只声明语言和授权边界，不点名 Skill、不强制 todo；任务输入中不包含路由答案、评分项或数据集标记。开发集默认运行 S01–S06，保留集 S07–S08 必须显式选择。TypeScript、Go 和 PHP 审查基于提供的源码与契约，不要求额外安装语言运行时；没有执行相应测试时必须保持未验证。
+
+| ID | 集合 | 任务与主要区分 |
+|---|---|---|
+| S01 | development | 局部代码解释；允许直接完成，不扩展为工程流程 |
+| S02 | development | 明确按钮文案；不因 HTML 文件强制设计 |
+| S03 | development | TypeScript 零值契约只读审查；观察审查选择与缺陷分类 |
+| S04 | development | 已知根因修复；核实后修复并运行已有验证 |
+| S05 | development | 执行已有局部方案；不重启需求批准 |
+| S06 | development | 只读界面评估；区分代码证据与浏览器视觉证据 |
+| S07 | holdout | Go 重试次数契约审查 |
+| S08 | holdout | PHP 零价格契约审查 |
+
+```bash
+python3 -B evals/behavior_eval.py list --suite selection-v1
+python3 -B evals/behavior_eval.py run --suite selection-v1 \
+  --baseline /absolute/path/to/frozen-baseline \
+  --candidate /absolute/path/to/frozen-candidate \
+  --output /absolute/path/to/new-development-output \
+  --include-no-skill --repetitions 3 --jobs 2
+
+# 候选固定后另开新目录；这些样本不再用于挑选或修改候选。
+python3 -B evals/behavior_eval.py run --suite selection-v1 --split holdout \
+  --baseline /absolute/path/to/frozen-baseline \
+  --candidate /absolute/path/to/frozen-candidate \
+  --output /absolute/path/to/new-holdout-output \
+  --include-no-skill --repetitions 3 --jobs 2
+```
+
+`--include-no-skill` 在 baseline/candidate 之外增加 `no-skill` 对照：不创建本地 `.agents/skills/`，`source=null`、`source_skills={}`，保持同一任务材料和项目规则。已知外部 Skill 仍按相同配置禁用；这只表示没有安装本仓库源包，不能证明模型的所有隐式上下文已隔离。选项只允许 `natural-v2`、`selection-v1` 和 `frontend-ui-v1` 中未指定入口的 F01–F04；带强制维护规则或固定入口的场景在创建运行目录前拒绝。
+
+三方对照每次重复包含三个实例，`--max-runs` 仍按实例计数，可能截断一个配对组；不完整组不能用于成本比较。旧套件默认仍为两方对照。保留集划分只是一项运行约定，脚本不会隐藏公开 fixture 或阻止人为重复运行；若用保留集结果调整候选，应将该集合视为开发材料并另建最终验收场景。显式 `--scenarios S07` 也会标记为 holdout，不改变其身份。
+
+先核对任务正确性、只读边界和验证真实性，再比较实际选择、无关加载、重复命令、工具输出与 usage。`local_skill_reads_proven=[]` 表示缺少可证明的完整读取，不等于未加载。人工复核可依据可见证据记录选择及理由，不强制所有正确任务具有唯一技能路由，也不把无技能对照不能加载技能判为失败。开发与保留集分别报告，不混算提升率。
+
+## 独立复核文件
+
+每个实例可另存 `review.json`，`report` 读取它并在 `summary.json` 中显示。它不修改机器 `result.json`、原始 trace 或历史评分。`schema_version` 固定为 `1`，`reviewer.kind` 为 `agent` 或 `human`，`reviewer.id` 标明实际复核者；身份是提交者声明，工具不验证其是否独立。
+
+`dimensions` 必须覆盖 `task_correctness`、`authorization`、`verification_accuracy`、`process_efficiency`、`evaluation_validity`。每维包含 `status`、非空 `reason` 和至少一条 `evidence`；状态可为 `pass/fail/unverified/not_applicable`，其中正确性、授权和评测有效性不能使用 `not_applicable`。证据是实例内已有文件的相对 `path`，文本可加从 1 开始的 `line`，截图等可只写路径；路径与行号会验证，但证据是否支持结论仍由复核者负责。
+
+单维格式如下，其余维度也须填写实际结论：
+
+```json
+{
+  "status": "unverified",
+  "reason": "最终回复有测试通过声明，但现有轨迹没有对应测试输出。",
+  "evidence": [{"path": "final-1.txt", "line": 1}]
+}
+```
+
+缺少文件为 `pending`，格式或证据位置错误为 `invalid`，缺证据结论保留 `unverified`。完整的复核通过也不能覆盖机器已确认的执行失败、只读越界或契约失败；未完成实例不能变成通过。报告将 Agent 与人工结果分别放入 `reviewed_outcomes`，每实例保留 `review`、`dataset_split` 和读取证据，不能将 Agent 评分称为人工验收。无独立复核文件时，运行结束仍不产生语义通过。
+
+## 界面与三方体验对照
+
+`experience-v1` 将三个[可维护性场景](maintainability-scenarios.md)接入运行器：X01 为局部界面精简，X02 为后端退款幂等修复，X03 为 CLI 信息精简与机器契约保护。每个实例使用独立的标准库 fixture；X01 需要临时监听本机回环端口，不能监听时探针标记未验证，不访问外部服务。项目规则固定要求读取被测版本的 `plan-execution`，因此本套件检验其显式加载后的行为，不证明自然触发或客户端全局指令生效。
+
+```bash
+python3 -B evals/behavior_eval.py list --suite experience-v1
+python3 -B evals/behavior_eval.py run --suite experience-v1 \
+  --baseline /absolute/path/to/frozen-baseline \
+  --candidate /absolute/path/to/frozen-candidate \
+  --output /absolute/path/to/new-output \
+  --scenarios X01,X02,X03 --repetitions 1 --jobs 1 --timeout 180
+```
+
+X01 探针覆盖既有表单钩子、基本无障碍标记、服务端操作及本地 HTTP 路径；X02 检查普通和重复退款及响应；X03 检查成功和失败的 JSON 与退出码。探针只覆盖这些声明的契约，不证明视觉、可用性、维护成本或提示是否有帮助。对照的用户体验、开发体验、Agent 体验及无关改动仍须逐项结合实际运行轨迹人工复核；未运行真实 Agent 时不能宣称场景通过。
+
+X01 对表单内按钮、金额输入与通过 `form` 属性关联的表单外控件检查有效归属；筛选和提交按钮各自所属的表单须包含有名称、未禁用的金额输入，包括检查禁用 `fieldset` 的继承与首个 `legend` 例外。按钮的 `formaction`、`formmethod` 可覆盖所属表单配置。反馈角色检查基于实际 HTTP 响应，允许按状态动态生成。表单检查仅解析静态 HTML，不覆盖 JavaScript 动态行为、浏览器对畸形 HTML 的修正或实际表单提交，仍须人工验证。此修正也适用于复用 X01 探针的前端场景；历史原始结果不回写，应保留修正后在副本上的独立复测证据。
+
+## 前端专项与路由对照
+
+`frontend-ui-v1` 单独评测新增的 `frontend-ui-ux`，不会改动或合并历史 `experience-v1`：F01 是既有后台优化，F02 是图书馆新页面，F03 是纯后端负对照，F04 是只读界面评估，F05 是显式工程入口的路由对照，F06/F07 对照已有方案中的设计缺口和明确文案修改，F08 对照明确的只读代码审查。F01–F04 的项目规则不点名专项或入口，用于观察自然选择；F05–F08 只指定工程入口，由它根据当前可用专项和任务缺口选择。旧版基线可以没有 `frontend-ui-ux`，不因为不存在而在 fixture 阶段失败；新版本是否实际加载仍须从轨迹证实。
+
+```bash
+python3 -B evals/behavior_eval.py list --suite frontend-ui-v1
+python3 -B evals/behavior_eval.py run --suite frontend-ui-v1 \
+  --baseline /absolute/path/to/frozen-baseline \
+  --candidate /absolute/path/to/frozen-candidate \
+  --output /absolute/path/to/new-output \
+  --scenarios F01,F02,F03,F04,F05,F06,F07,F08 --repetitions 1 --jobs 1 --timeout 180
+```
+
+F01、F04–F08 复用原有退款界面输入与有限操作探针，F03 复用退款接口契约探针；F02 的自动探针仅检查提供的活动信息是否出现在页面源码，不证明信息可见、页面可用或美观；信息不在源码中时可能由脚本或其他格式渲染，标为未验证而非失败。F04 和 F08 的完整工作区快照检查只读边界，包括被忽略文件。F06 需人工核对具体实现前是否补足实际设计缺口，F07 核对没有为已明确的局部修改额外强制设计阶段，F08 核对代码审查优先级。人工需结合截图、操作轨迹和具体视口检查视觉、使用体验及正确范围；工具输出、静态规则或模拟运行均不能替代真实 Agent、浏览器和人工复核。每个目标 Harness 单独记录结果，未提供足够路径证据时保持 Skill 加载未验证。
 
 ## 1.6.1 新版对照与自然触发
 

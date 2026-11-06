@@ -23,20 +23,42 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: "0.11.7"
 
-      - name: Validate release version
-        run: |
-          release=$(tr -d '\r\n' < VERSION)
-          test -n "$release"
-          for skill in skills/*; do
-            test "$(sed -n 's/^  version: //p' "$skill/SKILL.md")" = "$release"
-          done
+      - name: Install explicit Python
+        run: uv python install 3.12
 
-      - name: Validate every Skill
-        run: |
-          for skill in skills/*; do
-            uvx --from 'skills-ref==0.1.1' agentskills validate "$skill"
-          done
+      - name: Validate packages and run unit tests
+        run: uv run --no-project --python 3.12 python -B scripts/validate_repository.py --tests
 
-      - name: Run unit tests
-        run: python3 -m unittest discover -s tests -v
+      - name: Build standalone packages
+        run: uv run --no-project --python 3.12 python -B scripts/package_skills.py --output "$RUNNER_TEMP/skill-packages"
+
+  compatibility:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }} / ${{ matrix.suite }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: '3.9'
+            suite: test_bootstrap_project.py
+          - os: ubuntu-latest
+            python: '3.10'
+            suite: 'test_*.py'
+          - os: macos-latest
+            python: '3.12'
+            suite: 'test_*.py'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: "0.11.7"
+      - run: uv python install "${{ matrix.python }}"
+      - name: Check runtime compatibility
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: uv run --no-project --python "${{ matrix.python }}" python -B -m unittest discover -s tests -p "${{ matrix.suite }}"

@@ -2,6 +2,8 @@
 
 本仓库以标准 `SKILL.md` 为核心。修改应保持每个 `skills/<name>/` 目录可独立分发：相对引用只指向本 Skill 内的 `references/`、`assets/` 或 `scripts/`。
 
+跨 Skill 能力按名称从当前环境发现，存在时才读取其所属资源；不得用跨目录相对链接假定两者一起安装。缺失时的最小回退与代码记录依赖见 [Skill 契约](docs/skill-contracts.md)。
+
 ## 修改原则
 
 - `description` 说明“做什么”和“何时使用”，避免与相邻 Skill 争夺同一触发场景。
@@ -15,18 +17,12 @@
 运行：
 
 ```bash
-release=$(tr -d '\r\n' < VERSION)
-test -n "$release"
-
-for skill in skills/*; do
-  test "$(sed -n 's/^  version: //p' "$skill/SKILL.md")" = "$release"
-  uvx --from 'skills-ref==0.1.1' agentskills validate "$skill"
-done
-
-git diff --check
+python3 -B scripts/validate_repository.py --tests
 ```
 
-功能或指令语义有实质变化时，递增仓库级 `VERSION`，同步更新全部 10 个 Skill 的 `metadata.version`，并在 [CHANGELOG.md](CHANGELOG.md) 添加发布说明。使用 `feat:`、`fix:`、`docs:` 或 `refactor:` 前缀提交；提交说明应描述动机和范围。
+功能或指令语义有实质变化时，递增仓库级 `VERSION`，同步更新全部 11 个 Skill 的 `metadata.version`，并在 [CHANGELOG.md](CHANGELOG.md) 添加发布说明。使用 `feat:`、`fix:`、`docs:` 或 `refactor:` 前缀提交；提交说明应描述动机和范围。
+
+校验入口按失败退出；离线可用 `--offline`，但官方结构校验仍为未运行。行为变化优先使用受影响场景的新旧版对照，触发调整另看自然请求与负例；未参与调优的保留集在候选冻结后运行。规则所有者与开源设计参考见 [Skill 契约](docs/skill-contracts.md)，不把新增措辞本身当作优化完成。
 
 ## 可选元数据
 

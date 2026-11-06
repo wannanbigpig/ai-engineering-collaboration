@@ -4,12 +4,14 @@ description: "分析尚未明确的共享行为、跨模块数据流或契约影
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.4
+  version: 1.7.12
 ---
 
 # 变更影响分析
 
 修改前追踪受影响路径、数据流和风险，先分析后实施。
+
+项目有 `.aitasks/` 时，从当前可发现的 Skill 中定位可选的 `aitasks-maintenance`，存在才读取其目录内的 `references/query.md`，取摘要并按需读单条，不加载维护流程或假定相邻安装。未安装或工具不可用时，按关键词取少量命中记录及所属元数据，排除 `retired` / `superseded`；旧记录缺少状态仅作有效线索，结论仍核对当前调用链与契约。
 
 ## 追踪清单
 

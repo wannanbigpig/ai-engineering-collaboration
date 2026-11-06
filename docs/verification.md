@@ -2,29 +2,46 @@
 
 本仓库可自动验证 Skill 结构、版本一致性和 Markdown 空白；不同 Agent Harness 的发现与自动触发行为需要在目标环境中人工确认。
 
+## 四层测试及结论边界
+
+| 层级 | 检查什么 | 何时执行 | 能说明什么 |
+| --- | --- | --- | --- |
+| 格式与分发 | frontmatter、版本、独立资源、包摘要 | 每次 CI | 文件可校验、产物一致；不证明模型理解 |
+| 工具行为 | 安装、锁、归档、幂等、JSON 与评测器反例 | 相关变更定向跑，CI 跑完整套件 | Python 实现满足已测输入与副作用契约 |
+| 触发选择 | 自然请求、相似负例、固定入口对照 | description、入口或边界改变时 | 在所测任务/模型下的选择表现；显式调用不能代替自然触发 |
+| 任务效果 | 无技能/旧版/候选对照，正确性、授权、验证真实性与成本 | 相关行为变化时定向运行 | 是否有可见净收益；少量重复用于发现回归，不证明统计显著或普遍改善 |
+
+关键词测试只保护历史措辞线索，不作为行为通过依据，也不继续扩写成“背诵规则”评分。语义判断明确标为 Agent 或人工复核；机器探针与评审结论分开，评审者不能用自己的最终宣称替代工具输出。开发集用于调优，保留集在候选冻结后验收；用保留集选优后必须另留新场景。
+
+开源方法对照、本轮实际验证与失败样本见 [1.7.12 报告](../evals/reports/1.7.12.md)。
+
 ## 本地与 CI 校验
 
 ```bash
-release=$(tr -d '\r\n' < VERSION)
-test -n "$release"
-
-for skill in skills/*; do
-  test "$(sed -n 's/^  version: //p' "$skill/SKILL.md")" = "$release"
-  uvx --from 'skills-ref==0.1.1' agentskills validate "$skill"
-done
-
-git diff --check
+python3 -B scripts/validate_repository.py --tests
 ```
 
-GitHub Actions 运行同一版本一致性检查和 `agentskills validate`。这只能验证文件结构，不代表某个 Harness 已实际发现、加载或执行了 Skill。
+统一入口先检查版本与各 Skill 的本地资源，再调用固定版本 `skills-ref==0.1.1`、`git diff --check`，`--tests` 追加全部单测；任一步失败即返回非零，不被后续成功命令掩盖。`--offline` 仅跳过外部结构校验，并明确输出未运行；这不构成完整结构验收。
+
+差异空白检查同时覆盖工作区与暂存区，不是对所有历史提交的全文 lint。资源检查支持常见内联/引用式 Markdown 链接和可选标题，跳过普通围栏及行内代码；HTML 链接、嵌套容器/标签和多行引用定义需另行核对，不能将此轻量检查称为完整 Markdown 解析。
+
+GitHub Actions 的 Linux/Python 3.12 主任务运行同一入口并生成独立包；另有 Linux/Python 3.9 安装器、Linux/Python 3.10 全部单测、macOS/Python 3.12 全部单测矩阵。配置了任务不等于远程已执行，具体成功证据须查看对应 CI 运行。
 
 ## 单元测试
 
 ```bash
-python3 -m unittest discover -s tests -v
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s tests
 ```
 
-测试在临时 Git 项目中验证首次安装、重复运行、dry-run、冲突拒绝、`.aitasks` 跟踪选项、Custom Instructions 输出，以及 Claude Code、Gemini、ZCode 兼容链接的创建与幂等、相同副本保留、冲突拒绝和失败指引；经验维护测试覆盖无元数据/混合经验检索、JSON正文与元数据归属/计数状态/源行号、只读检索与维护写入隔离，以及无到期记录时仅更新检查状态；命令示例测试在可用的 bash/zsh 中执行含空格路径的只读命令。质量契约测试仅检查历史规则的静态线索，不能证明指令之间没有冲突或真实行为正确。GitHub Actions 运行完整测试发现命令。
+测试在临时项目中覆盖安装、dry-run、只读版本检查、基线匹配升级、定制拒绝、兼容入口和替换失败回滚；维护工具覆盖记录字节/权限保留、归档恢复、经验排序与归档回退/截断提示，以及按 ID 完成 todo、结果/验证/状态更新和同锁阈值维护。命令示例在可用的 bash/zsh 中执行含空格路径的操作。质量契约测试仍只检查历史静态线索，不能证明真实 Agent 行为；完整测试由 CI 执行。
+
+记忆流程另验证摘要数量和序列化字符预算、单条/归档/旧记录读取、todo 筛选、显式会话 stamp 与查询零写入；观察覆盖独立任务计数、并发、未验证跳过、损坏状态保留；经验覆盖明确要求直记、二次准入、原 ID 更新、关联失败重试及交错任务复用幂等。预算由实际工具输出长度检查，不把它换算成模型 token 或节省比例。
+
+召回与失效测试覆盖同义概念去重、项目别名变化、弱匹配归档补查、失效记录排除及显式审计、可恢复状态和有效替代 ID；归档经验计数和状态变化与同日维护追加不能互相覆盖。`memory-v1` 另以真实 CLI 轨迹检查 Agent 是否实际采用查询路径，结果见 [1.7.9 记忆试验](../evals/reports/1.7.9-memory-pilot.md)，不能由这些单元测试推定自然触发通过。
+
+观察查询测试覆盖有界候选、零写入、缺失/损坏状态、独立进程复用 key 及不同原因不自动合并；短查询参考在含空格路径的临时项目实际执行。`memory-v2` 的 R03 使用两个新 CLI 会话核对持久观察复用，分别保存首次与第二次记录，不以单个会话中的复述代替跨会话验证。验收优先检查正确性、记忆动作和只读边界，token 仅作效率观察，必要正文与证据可扩大读取预算。
+
+三次只读配对和跨会话试验的实际结果见 [1.7.10 验收报告](../evals/reports/1.7.10-memory-workflow.md)。
 
 ## `.aitasks` CLI smoke test
 
@@ -48,9 +65,32 @@ python3 skills/aitasks-maintenance/scripts/maintain_aitasks.py --project-root /t
 
 未在具体 Harness 中实际执行时，应报告“未验证”，不要将目录或静态检查写成运行时验证。
 
+## 兼容与生效矩阵
+
+| 层级 | 当前检查入口/证据 | 不能据此推断 |
+| --- | --- | --- |
+| 标准格式与单包资源 | `validate_repository.py`，本地资源不得越出 Skill 目录 | 自然触发准确率 |
+| 安装、升级与兼容入口 | `bootstrap_project.py --check --json`，临时项目回归 | 当前会话已加载最新源码 |
+| Python 与操作系统 | CI 的显式版本矩阵；本地实测另记版本 | 尚未执行的远程结果；Windows 全部路径已通过 |
+| Codex 显式调用与自然选择 | 真实 CLI 场景、原始轨迹与逐维复核 | 其他模型和 Harness 有相同行为 |
+| Claude Code / Gemini / OpenCode / Cursor / ZCode | 安装入口有工具检查；实际加载、自然触发和运行效果需分别验收 | 软链接存在即完整支持 |
+| 前端视觉与交互 | 实际页面、视口、截图及操作记录 | 构建成功或源码包含内容即体验通过 |
+
+`compatibility: universal` 指文本工作流设计，不是以上所有组合的通过声明。只安装入口或专项时，检查其资源自足及可选维护能力缺失时的回退；这些实际选择须单独观察。
+
+## 确定性分发
+
+```bash
+python3 -B scripts/package_skills.py --output /absolute/path/to/new-release-directory
+```
+
+每个 ZIP 根包含 `SKILL.md`、自身资源及许可证，附 `manifest.json` 的版本、文件权限/摘要和 ZIP 摘要。过滤规则与安装器一致，不遗漏未跟踪的真实资源；固定 ZIP 时间戳与条目排序，不将本机缓存或 mtime 混入产物。输出目录非空时拒绝覆盖，不上传或修改用户安装。打包检查资源和版本；官方结构校验仍由上面的完整入口执行。
+
+验收覆盖缓存与 mtime 变化下产物一致、真实资源变化改变摘要、解包资源齐全、许可证保留及拒绝覆盖。真实用户定制仍参与安装冲突比较，不能把所有额外文件都当成缓存排除。
+
 ## 可维护性行为评测
 
-[可维护性行为评测场景](../evals/maintainability-scenarios.md)覆盖复用已有实现、影响分析、错误处理、量化证据、避免过度拆分、沿用后端主流风格、无设计稿时沿用现有 UI 和无关修改保护。它们用于验证 Skill 对 Agent 实际行为的影响，不由静态单元测试替代。
+[可维护性行为评测场景](../evals/maintainability-scenarios.md)覆盖复用已有实现、影响分析、错误处理、量化证据、避免过度拆分、同一边界复用校验、新信任边界与并发保护、真实实现测试、生成源维护、沿用后端主流风格、无设计稿时沿用现有 UI、界面精简与局部布局调整、后端三方体验、CLI 信息与契约保护，以及无关修改保护。它们用于验证 Skill 对 Agent 实际行为的影响，不由静态单元测试替代。
 
 在每个目标 Harness 中分别执行：
 
@@ -59,7 +99,7 @@ python3 skills/aitasks-maintenance/scripts/maintain_aitasks.py --project-root /t
 3. 保存提示、工具调用、最终 diff、验证输出和最终回复，逐项核对“必须观察到”与“不得出现”。
 4. 记录 Harness、模型、Skill 版本、fixture commit 和日期；存在禁止项或缺少工具证据时判定失败。
 
-通用场景可在不同 Harness 中手工执行；[成对行为运行器](../evals/behavior-evaluation.md)提供 Codex CLI 适配。某个适配器的运行结果不能代表其他 Harness，实际模型行为也不能由场景定义或质量契约推断。
+通用场景可在不同 Harness 中手工执行；[成对行为运行器](../evals/behavior-evaluation.md)提供 Codex CLI 适配。其中 `experience-v1` 提供界面、后端及 CLI 的有限契约探针；`frontend-ui-v1` 另覆盖既有后台、新页面、后端负对照、只读 UI、已有方案和工程入口路由，视觉与体验结论仍需人工复核。某个适配器的运行结果不能代表其他 Harness，实际模型行为也不能由场景定义或质量契约推断。
 
 ## 工作流边界评测
 
