@@ -4,14 +4,14 @@ description: "审查代码或核实审查反馈；默认只读，明确要求修
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.12
+  version: 1.7.14
 ---
 
 # 代码审查与反馈核验
 
 默认不修改代码；目标是用可复核证据发现问题，并核对变更意图、输入输出契约和既有行为。
 
-项目有 `.aitasks/` 时，从当前可发现的 Skill 中定位可选的 `aitasks-maintenance`，存在才读取其目录内的 `references/query.md`，调用 `context`、按 ID 取相关经验，无需加载维护流程或假定相邻安装。未安装或工具不可用时，按关键词取少量命中记录及所属元数据，排除 `retired` / `superseded`；旧记录缺少状态仅作有效线索。经验只作线索，结论核对当前代码与契约。
+项目有 `.aitasks/` 时，先从当前可发现的 Skill 中定位可选的 `aitasks-maintenance`，存在才读取其目录内的 `references/query.md`，不加载维护流程或假定相邻安装。未安装或不支持只读查询时，用本 Skill 自带的[只读查询脚本](scripts/query_aitasks.py)：`python3 -B "<skill-dir>/scripts/query_aitasks.py" --project-root "<project-root>" context --query "模块 符号 错误码"`，按返回 ID 用 `get-record --kind lesson --id …`（todo 用 `--kind todo`）取必要正文，由脚本处理状态与围栏边界。Python 不可用时只取少量标题及所属元数据定位线索，无法核实的正文与适用性标为未验证，依据当前代码取证，不临时编写经验解析器。经验只作线索，结论核对当前代码与契约。
 
 请求审查时使用下方“审查范围”和“输出格式”；仅核验收到的反馈时使用“收到审查反馈时”，只检查该意见所需路径，输出判定、依据和后续动作。两者都需要时依次处理并复用已有结论，不为单条反馈重新审查全部改动。
 

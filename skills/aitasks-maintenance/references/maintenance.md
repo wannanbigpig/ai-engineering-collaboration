@@ -97,12 +97,12 @@ python3 "$AITASKS_TOOL" --project-root "$AITASKS_PROJECT" set-lesson-status --id
 
 ## 观察、记录与更新
 
-根因确认且准备观察前，用 `find-observations --query "模块 症状 原因"` 查询候选；默认最多三条、总输出 2000 字符，可显式调整 `--limit` / `--max-chars`。返回原 key、证据位置、次数、状态和关联经验 ID，不返回任务历史，不创建文件或更新计数。它复用查询别名扩展，但不据相似词合并签名。跨会话核对模块、症状和原因均一致时原样复用返回的 key；原因不同或证据不足则不合并，必要时读取证据位置或既有任务结果。不同独立任务使用不同 todo ID，同任务重试保留 ID。
+根因确认且准备观察前，用 `find-observations --query "模块 症状 原因"` 查询候选；默认最多三条、总输出 2000 字符，可显式调整 `--limit` / `--max-chars`。返回原 key、证据位置、次数、状态和关联经验 ID，不返回任务历史，不创建文件或更新计数。它复用查询别名扩展，但不据相似词合并签名。跨会话核对模块、症状和原因均一致时原样复用返回的 key；原因不同或证据不足则不合并，必要时读取证据位置或既有任务结果。不同独立任务使用不同的稳定任务 ID，已有 todo 时复用其 ID，同任务重试保留 ID；不为仅维护经验的诊断额外建 todo。
 
 仅在已允许维护写入、原因已验证且做法可复用时调用：
 
 ```bash
-python3 "$AITASKS_TOOL" --project-root "$AITASKS_PROJECT" observe --key "模块.症状.原因" --task-id "当前todo的ID" --evidence "src/file.py:42" --verified
+python3 "$AITASKS_TOOL" --project-root "$AITASKS_PROJECT" observe --key "模块.症状.原因" --task-id "稳定任务ID" --evidence "src/file.py:42" --verified
 python3 "$AITASKS_TOOL" --project-root "$AITASKS_PROJECT" upsert-lesson --key "模块.症状.原因" --title "短标题" --context "场景" --problem "问题" --cause "已确认原因" --resolution "执行规则" --scope "适用条件"
 ```
 
@@ -111,7 +111,7 @@ python3 "$AITASKS_TOOL" --project-root "$AITASKS_PROJECT" upsert-lesson --key "�
 - `ready` 只证明次数，不能证明经验质量。Agent 仍须核对原因、适用范围和做法；`upsert-lesson --key …` 自动新建要求两个独立观察且原因非“未确认”，将证据位置带入经验。更新已有活动或归档经验，先按 ID 读取核对，再传 `--id`；已关联的 key 可直接定位原 ID。只按标题匹配不自动覆盖：同标题时核对内容，确属同一经验则指定 ID，否则使用有区分度的标题。
 - 用户明确要求记录时用 `upsert-lesson --explicit`，不等待二次，未知原因可标“未确认”；不带签名时不依赖观察文件。自动流程优先用该命令，旧 `add-lesson` 保留手工兼容。
 - `upsert-lesson` 自动检查归档阈值；观察本身不改经验/todo 数量，无需额外归档。新建经验时记录关联签名，记录先写、观察关联后写；部分失败可用相同输入重试并复用已生成 ID。旧记录若缺少该签名且关联未完成，须读取核对后显式传 ID，不按标题猜测。归档经验可在同一维护锁内按 ID 原位更新，ID 重复或记录不存在时停止；不擅自重建历史。
-- 更新单行字段时保留后续自由文本及其他笔记。若已有字段首行为空且后续是多行内容，工具无法安全区分字段正文和附加笔记，会在写入前停止；读取原文后手工核对更新，再补做维护阈值检查。
+- 更新单行字段时保留后续自由文本及其他笔记。若已有字段首行为空且后续是多行内容，或后续首个非空行是缩进续行，工具无法安全区分字段正文和附加笔记，会在写入前停止；读取原文后手工核对更新，再补做维护阈值检查。
 - 观察状态损坏时保留原文件并报错；Agent 不能伪造 `--verified` 或 `--explicit` 代替事实/授权。工具计数和单元测试不证明宿主每次都会选择正确的记忆动作，真实触发仍需行为验收。
 
 ## 维护与归档阈值

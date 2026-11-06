@@ -4,14 +4,14 @@ description: "排查根因未明的本地 Bug、测试或构建失败、性能�
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.12
+  version: 1.7.14
 ---
 
 # 系统化调试
 
 针对本地 Bug、测试/构建失败、性能异常、集成问题和非预期行为排查根因。以下步骤按证据缺口选择，不是固定流水线；当前证据已确认根因时直接进入最小修复与复验。
 
-项目有 `.aitasks/` 时，从当前可发现的 Skill 中定位可选的 `aitasks-maintenance`，存在才读取其目录内的 `references/query.md`，取相关经验与 todo，不加载维护流程或假定相邻安装。未安装或工具不可用时，按关键词取少量命中记录及所属元数据，排除 `retired` / `superseded`；旧记录缺少状态仅作有效线索。经验须与当前失败证据核对。
+项目有 `.aitasks/` 时，先从当前可发现的 Skill 中定位可选的 `aitasks-maintenance`，存在才读取其目录内的 `references/query.md`，不加载维护流程或假定相邻安装。未安装或不支持只读查询时，用本 Skill 自带的[只读查询脚本](scripts/query_aitasks.py)：`python3 -B "<skill-dir>/scripts/query_aitasks.py" --project-root "<project-root>" context --query "模块 符号 错误码"`，按返回 ID 用 `get-record --kind lesson --id …`（todo 用 `--kind todo`）取必要正文，由脚本处理状态与围栏边界。Python 不可用时只取少量标题及所属元数据定位线索，无法核实的正文与适用性标为未验证，依据当前代码取证，不临时编写经验解析器。经验须与当前失败证据核对。
 
 ## 流程
 

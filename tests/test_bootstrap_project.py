@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import importlib.util
+import contextlib
+import io
 import json
 import shutil
 import subprocess
@@ -208,6 +210,42 @@ class BootstrapProjectTest(unittest.TestCase):
                     self.assertEqual(result.stdout, "")
                     self.assertEqual(list(Path(directory).iterdir()), [])
 
+    def test_check_reports_non_utf8_skill_with_manifest_and_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            installed = self.run_script("--target", str(target))
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            skill_file = target / ".agents/skills/ci-triage/SKILL.md"
+            invalid = b"\xff\xfeinvalid UTF-8 Skill\n"
+            skill_file.write_bytes(invalid)
+            original_mode = skill_file.stat().st_mode
+
+            result = self.run_script("--target", str(target), "--check", "--json")
+
+            self.assertEqual(result.returncode, 1, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertFalse(report["current"])
+            self.assertEqual(len(report["skills"]), len(SOURCE_SKILLS))
+            skill = next(row for row in report["skills"] if row["name"] == "ci-triage")
+            self.assertEqual(skill["status"], "different")
+            self.assertIsNone(skill["installed"]["version"])
+            self.assertEqual(len(skill["installed"]["manifest_sha256"]), 64)
+            self.assertNotEqual(skill["installed"]["manifest_sha256"], skill["source"]["manifest_sha256"])
+            diagnostic = skill["installed"]["diagnostics"][0]
+            self.assertEqual(diagnostic["code"], "invalid_utf8")
+            self.assertEqual(diagnostic["path"], str(skill_file.resolve()))
+            self.assertIn("UTF-8", diagnostic["message"])
+            self.assertEqual(result.stderr, "")
+
+            text = self.run_script("--target", str(target), "--check")
+            self.assertEqual(text.returncode, 1, text.stderr)
+            self.assertIn("ci-triage: different", text.stdout)
+            self.assertIn("UTF-8", text.stdout)
+            self.assertIn(str(skill_file.resolve()), text.stdout)
+            self.assertEqual(text.stderr, "")
+            self.assertEqual(skill_file.read_bytes(), invalid)
+            self.assertEqual(skill_file.stat().st_mode, original_mode)
+
     def test_check_json_user_scope_and_invalid_content_are_readonly(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory)
@@ -373,6 +411,55 @@ class BootstrapProjectTest(unittest.TestCase):
             self.assertEqual(self.run_script("--scope", "user", "--check", environment=environment).returncode, 0)
             self.assertFalse((home / "AGENTS.md").exists())
             self.assertFalse((home / ".gitignore").exists())
+
+    def test_initial_install_failure_leaves_no_partial_skill_and_can_retry(self) -> None:
+        spec = importlib.util.spec_from_file_location("bootstrap_initial_failure", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for phase in ("copy", "publish"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source_root = root / "source"
+                source = source_root / "skills/example"
+                source.mkdir(parents=True)
+                (source / "SKILL.md").write_text("Example Skill\n")
+                resource = source / "resource.sh"
+                resource.write_text("#!/bin/sh\necho example\n")
+                resource.chmod(0o755)
+                target = root / "project"
+                target.mkdir()
+                destination = target / ".agents/skills/example"
+                copyfile, replace = shutil.copyfile, Path.replace
+
+                def fail_copy(src, dst, *args, **kwargs):
+                    if Path(src).name == "resource.sh":
+                        Path(dst).write_bytes(b"partial resource")
+                        raise OSError("injected copy failure")
+                    return copyfile(src, dst, *args, **kwargs)
+
+                def fail_publish(path, destination_path):
+                    if path.name == "new":
+                        self.assertEqual(path.parent.parent, destination.parent.resolve())
+                        self.assertEqual(module.file_manifest(path), module.file_manifest(source))
+                        self.assertFalse(destination.exists())
+                        raise OSError("injected publication failure")
+                    return replace(path, destination_path)
+
+                failure = (mock.patch.object(shutil, "copyfile", fail_copy) if phase == "copy"
+                           else mock.patch.object(Path, "replace", fail_publish))
+                with mock.patch.object(module, "repository_root", return_value=source_root):
+                    with failure, self.assertRaises((OSError, module.BootstrapError)) as raised:
+                        module.install_project(target, False, False)
+                    self.assertFalse(destination.exists())
+                    self.assertEqual(list(destination.parent.iterdir()), [])
+                    self.assertIsInstance(raised.exception, module.BootstrapError)
+                    self.assertFalse((target / "AGENTS.md").exists())
+                    self.assertFalse((target / ".gitignore").exists())
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(module.install_project(target, False, False), 0)
+                self.assertEqual(module.file_manifest(destination), module.file_manifest(source))
+                self.assertEqual((destination / "resource.sh").stat().st_mode & 0o777, 0o755)
+                self.assertEqual(list(destination.parent.iterdir()), [destination])
 
     def test_upgrade_restores_previous_copy_when_replacement_fails(self) -> None:
         spec = importlib.util.spec_from_file_location("bootstrap_upgrade", SCRIPT)
@@ -902,6 +989,42 @@ class BootstrapProjectTest(unittest.TestCase):
                     second = self.run_script(*arguments, environment=environment)
                     self.assertEqual(second.returncode, 0, second.stderr)
                     self.assertIn("0 linked", second.stdout)
+
+    def test_shared_compatibility_directories_install_in_both_scopes(self) -> None:
+        for scope in ("project", "user"):
+            with self.subTest(scope=scope), tempfile.TemporaryDirectory() as directory:
+                target = Path(directory) / "target"
+                target.mkdir()
+                shared = Path(directory) / "shared skills"
+                shared.mkdir()
+                for harness in (".gemini", ".claude", ".zcode"):
+                    (target / harness).mkdir()
+                    (target / harness / "skills").symlink_to(shared, target_is_directory=True)
+                arguments = ("--target", str(target)) if scope == "project" else ("--scope", "user")
+                environment = dict(os.environ, HOME=str(target))
+
+                preview = self.run_script(*arguments, "--dry-run", environment=environment)
+                self.assertEqual(preview.returncode, 0, preview.stderr)
+                self.assertEqual(list(shared.iterdir()), [])
+                self.assertFalse((target / ".agents").exists())
+
+                first = self.run_script(*arguments, environment=environment)
+                self.assertEqual(first.returncode, 0, first.stderr)
+                for name in SOURCE_SKILLS:
+                    canonical = target / ".agents/skills" / name
+                    for harness in (".gemini", ".claude", ".zcode"):
+                        link = target / harness / "skills" / name
+                        self.assertTrue(link.is_symlink(), link)
+                        self.assertEqual(link.resolve(), canonical.resolve())
+                self.assertEqual((target / "AGENTS.md").exists(), scope == "project")
+                self.assertEqual((target / ".gitignore").exists(), scope == "project")
+
+                second = self.run_script(*arguments, environment=environment)
+                self.assertEqual(second.returncode, 0, second.stderr)
+                self.assertIn("0 linked", second.stdout)
+                checked = self.run_script(*arguments, "--check", "--json", environment=environment)
+                self.assertEqual(checked.returncode, 0, checked.stderr)
+                self.assertTrue(json.loads(checked.stdout)["current"])
 
     def test_user_scope_dry_run_reports_gemini_links_without_writing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

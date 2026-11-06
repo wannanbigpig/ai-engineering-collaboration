@@ -12,6 +12,9 @@ import string
 import sys
 from urllib.parse import unquote, urlsplit
 
+from bootstrap_project import BootstrapError, file_manifest
+from sync_query_tools import check_query_tools
+
 
 ROOT = Path(__file__).resolve().parents[1]
 LINK_LABEL = r"(?<!\\)\[((?:\\.|[^\]\\\n])*)\]"
@@ -91,7 +94,7 @@ def markdown_link_targets(text: str) -> list[str]:
 
 
 def check_packages(root: Path) -> list[str]:
-    errors = []
+    errors = check_query_tools(root)
     try:
         version = (root / "VERSION").read_text(encoding="utf-8").strip()
     except OSError as error:
@@ -111,9 +114,15 @@ def check_packages(root: Path) -> list[str]:
         match = re.search(r"^  version: (.+)$", body, re.MULTILINE)
         if not match or match.group(1) != version:
             errors.append(f"{entry}: metadata.version differs from VERSION ({version})")
+        try:
+            manifest = file_manifest(skill)
+        except BootstrapError as error:
+            errors.append(str(error))
+            continue
         # Validate each package in isolation: a resource in a sibling Skill is
-        # unavailable to users who install this Skill alone.
-        for document in sorted(skill.rglob("*.md")):
+        # unavailable to users who install this Skill alone. Inspect only the
+        # distributed Markdown, using the installer's resource inventory.
+        for document in (skill / name for name in manifest if name.endswith(".md")):
             for target in markdown_link_targets(document.read_text(encoding="utf-8")):
                 parsed = urlsplit(target)
                 if parsed.scheme or parsed.netloc or not parsed.path:
@@ -123,6 +132,17 @@ def check_packages(root: Path) -> list[str]:
                     errors.append(f"{document}: resource outside standalone package: {target}")
                 elif not resource.exists():
                     errors.append(f"{document}: missing resource: {target}")
+                else:
+                    relative = resource.relative_to(skill.resolve())
+                    if resource.is_dir():
+                        # The file-only release archive creates a directory only
+                        # when it contains at least one distributed descendant.
+                        prefix = relative.as_posix().rstrip("/") + "/" if relative.parts else ""
+                        if not any(name.startswith(prefix) for name in manifest):
+                            errors.append(f"{document}: directory has no distributed files: {target} "
+                                          "(release archives omit empty directories)")
+                    elif relative.as_posix() not in manifest:
+                        errors.append(f"{document}: resource is excluded from distribution: {target}")
     return errors
 
 

@@ -11,6 +11,7 @@
 - 调整触发、授权或阶段规则时，同步核对专项与入口是否一致，并更新相关行为场景；不要新增只断言措辞存在的测试来证明行为正确。脚本变更使用输入输出和副作用回归测试。
 - 不复制第三方 Skill 的文字、目录结构或品牌；外部项目只可作为可验证的设计参考。
 - `.aitasks` 的模板与维护逻辑只由 `aitasks-maintenance` 管理。
+- 只读解析与查询的权威源码是 `skills/aitasks-maintenance/scripts/query_aitasks.py`；维护 CLI 直接复用，四个独立消费者中的查询脚本及别名资产是生成副本。修改权威源码或别名后运行 `python3 -B scripts/sync_query_tools.py --write`，不要分别编辑副本；统一校验会检查内容及权限一致。
 
 ## 提交前
 

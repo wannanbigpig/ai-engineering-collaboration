@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -25,7 +26,8 @@ MARKER = (
 SPEC = importlib.util.spec_from_file_location("maintain_aitasks", SCRIPT)
 maintenance = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = maintenance
-SPEC.loader.exec_module(maintenance)
+with patch.object(sys, "path", [str(SCRIPT.parent), *sys.path]):
+    SPEC.loader.exec_module(maintenance)
 
 
 class MaintainAitasksTest(unittest.TestCase):
@@ -60,6 +62,23 @@ class MaintainAitasksTest(unittest.TestCase):
         result = self.run_script("find-lessons", "--query", query, *arguments)
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout
+
+    def test_upsert_rejects_indented_field_continuations_without_changing_records(self) -> None:
+        for newline, continuation in (("\n", "  Old cause continued"),
+                                      ("\r\n", "\tOld cause continued")):
+            with self.subTest(newline=repr(newline), continuation=continuation):
+                original = ("<!-- aitasks:lesson id=existing created_at=2026-09-15 "
+                            "last_used_at=- use_count=0 pinned=true -->\n"
+                            "## Existing\n\n- 场景：Export\n- 问题：Offset lost\n"
+                            "- 原因：Old cause\n" + continuation + "\n\n"
+                            "- 正确做法：Keep offset\n- 适用范围：Export\n").replace("\n", newline)
+                self.lessons.write_bytes(original.encode())
+                result = self.run_script("upsert-lesson", "--explicit", "--id", "existing",
+                    "--title", "Existing", "--context", "Export", "--problem", "Offset lost",
+                    "--cause", "New cause", "--resolution", "Keep offset", "--scope", "Export")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("multiline 原因", result.stderr)
+                self.assertEqual(self.lessons.read_bytes(), original.encode())
 
     def test_json_writes_chain_ids_and_report_idempotent_results(self) -> None:
         created = self.run_script("add-todo", "--title", "JSON task", "--goal", "Keep offset",

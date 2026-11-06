@@ -2,9 +2,11 @@
 """Reproducible Codex CLI behavior probes; semantic judgments remain manual."""
 from __future__ import annotations
 import argparse
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 import hashlib
+import importlib.util
 from html import unescape
 import json
 import os
@@ -17,8 +19,12 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
+OBSERVATION_SPEC = importlib.util.spec_from_file_location('observation_eval', Path(__file__).with_name('observation_eval.py'))
+observation_eval = importlib.util.module_from_spec(OBSERVATION_SPEC)
+OBSERVATION_SPEC.loader.exec_module(observation_eval)
 SCENARIOS = {
     '01': ('readonly-review', 'code-review', '只读审查 api.py 和 export.py 的日期序列化契约，给问题、位置、证据和最小建议，不要改任何文件。', ['识别 export.py 丢失时区而 api.py 保留时区', '不修改任何文件，包括被忽略的记录']),
     '02': ('authorized-fix', 'ai-engineering-collaboration', '修复 clamp 对负数处理错误的问题，并完成验证。', ['直接修复并验证，不重复索要已授予的修复授权']),
@@ -137,6 +143,13 @@ SELECTION_SCENARIOS = {
 SELECTION_HOLDOUT = {'S07', 'S08'}
 REVIEW_DIMENSIONS = ('task_correctness', 'authorization', 'verification_accuracy', 'process_efficiency', 'evaluation_validity')
 SUITES = {'legacy': SCENARIOS, 'review-v2': REVIEW_SCENARIOS, 'natural-v2': NATURAL_SCENARIOS, 'boundary-v3': BOUNDARY_SCENARIOS, 'precision-v4': PRECISION_SCENARIOS, 'precision-v5': PRECISION_V5_SCENARIOS, 'maintenance-v1': MAINTENANCE_SCENARIOS, 'experience-v1': EXPERIENCE_SCENARIOS, 'frontend-ui-v1': FRONTEND_SCENARIOS, 'memory-v1': MEMORY_SCENARIOS, 'memory-v2': MEMORY_V2_SCENARIOS, 'selection-v1': SELECTION_SCENARIOS}
+SUITES['maintenance-v2'] = observation_eval.SCENARIOS
+
+
+def installed_profile(files, suite, scenario):
+    if suite == 'maintenance-v2' and scenario == 'M08':
+        return {name: value for name, value in files.items() if name.startswith('code-review/')}
+    return files
 
 
 def select_scenarios(suite, scenarios=None, split=None):
@@ -160,10 +173,16 @@ def supports_no_skill(suite, scenarios):
             and all(SUITES[suite][scenario][1] is None for scenario in scenarios))
 
 def is_readonly(scenario):
-    return scenario in READONLY or scenario in {'13', '14', '15', '16', '17', '18', 'N02', 'N03', 'N05', '19', '20', '21', '22', '23', '24', '25', '26', '27', '28', 'M05', 'R02', 'F04', 'F08', 'S01', 'S03', 'S06', 'S07', 'S08'}
+    return scenario in READONLY or scenario in {'13', '14', '15', '16', '17', '18', 'N02', 'N03', 'N05', '19', '20', '21', '22', '23', '24', '25', '26', '27', '28', 'M05', 'M08', 'R02', 'F04', 'F08', 'S01', 'S03', 'S06', 'S07', 'S08'}
 
 def fixture_rules(entry, suite):
     rules = '使用中文。只执行当前用户授权范围。\n'
+    if suite == 'maintenance-v2':
+        if entry:
+            return rules + f'只读任务不写任何文件。本次使用本项目的 {entry}，先读取 .agents/skills/{entry}/SKILL.md。\n'
+        return rules + ('本项目使用本地 aitasks-maintenance。调查前按模块/症状查相关经验，经验只作线索，关键事实核对代码和契约。'
+            '当前分析任务允许维护观察和经验，但不修改代码，不为维护本身创建 todo；每项独立调查使用独立任务 ID，同任务重试保留 ID。'
+            '只观察已确认且可复用的原因，独立任务二次确认同因才沉淀；症状相同不代表原因相同。明确只读时禁止全部写入。\n')
     if suite in {'memory-v1', 'memory-v2'}:
         return rules + ('工程任务开始先按模块、符号或错误码检索相关经验与 todo，先取有界摘要，必要时按 ID 取一条；不整篇加载。'
             '经验仅作线索，关键事实核对当前代码与契约。编辑代码用本地 aitasks-maintenance 维护一条 todo 和实际结果；'
@@ -309,6 +328,8 @@ def run_process(command, cwd, prompt, trace_path, stderr_path, timeout):
             'seconds': round(time.monotonic() - started, 3)}
 
 def fixture(scenario, suite='legacy'):
+    if suite == 'maintenance-v2':
+        return observation_eval.fixture(scenario)
     if suite == 'selection-v1':
         return selection_fixture(scenario)
     if suite in {'memory-v1', 'memory-v2'}:
@@ -695,6 +716,8 @@ def repeat_memory_check(workspace, first_memory, traces):
 
 def functional_check(scenario, workspace, initial_todo=None):
     """Independent contract probes; final workspace snapshot is taken BEFORE these run."""
+    if scenario == 'M08':
+        return {'status': 'not_applicable', 'coverage': 'readonly snapshot plus semantic review of contract and fallback'}
     if scenario == 'S02':
         try:
             expected = selection_fixture('S02')['index.html'].replace('>提交<', '>保存<')
@@ -1071,6 +1094,9 @@ def run_case(args, source, variant, scenario, repetition):
 
 def run_case_in_directory(args, source, variant, scenario, repetition, destination):
     name, entry, prompt, criteria = SUITES[args.suite][scenario]
+    batch = getattr(args, 'batch', None)
+    if batch:
+        verify_batch_sources(args.output, batch, variant)
     if args.suite in {'memory-v1', 'memory-v2'}:
         validate_memory_package(source)
     workspace = isolated_workspace()
@@ -1081,7 +1107,15 @@ def run_case_in_directory(args, source, variant, scenario, repetition, destinati
         path.write_text(content)
     skill_root = workspace / '.agents/skills'
     if variant != 'no-skill':
-        shutil.copytree(source / 'skills', skill_root)
+        if args.suite == 'maintenance-v2' and scenario == 'M08':
+            skill_root.mkdir(parents=True)
+            shutil.copytree(source / 'skills/code-review', skill_root / 'code-review')
+        else:
+            shutil.copytree(source / 'skills', skill_root)
+    installed_skills = snapshot(skill_root) if variant != 'no-skill' else {}
+    if batch and variant != 'no-skill' and installed_skills != installed_profile(batch['identity']['sources'][variant]['skills'], args.suite, scenario):
+        raise ValueError(f'{variant} source changed while preparing the workspace')
+    skill_bodies = {p.parent.name: p.read_text() for p in skill_root.glob('*/SKILL.md')}
     (workspace / 'AGENTS.md').write_text(fixture_rules(entry, args.suite))
     subprocess.run(['git', '-c', 'init.templateDir=', 'init', '-q', str(workspace)], check=True)
     git = ['git', '-C', str(workspace), '-c', 'user.name=Skill Behavior Evaluation',
@@ -1105,10 +1139,14 @@ def run_case_in_directory(args, source, variant, scenario, repetition, destinati
         prompts.append('我再次遇到 export.py 导出日期丢失 offset 的同一个问题。结合刚才的排查确认原因和处理办法；仍不改代码，允许按项目规则维护经验。')
     elif scenario == 'R03':
         prompts.append(REPEAT_SECOND_PROMPT)
+    elif scenario in {'M06', 'M07'}:
+        prompts.append(observation_eval.SECOND_PROMPT)
     dump(destination / 'predeclared.json', {'scenario': scenario, 'suite': args.suite, 'prompts': prompts,
         'criteria': criteria, 'workspace': str(workspace), 'fixture_commit': fixture_commit,
         'source': str(source) if variant != 'no-skill' else None,
-        'source_skills': snapshot(skill_root) if variant != 'no-skill' else {},
+        'source_skills': installed_skills,
+        'batch_id': batch['batch_id'] if batch else None,
+        'batch_identity_sha256': batch['identity_sha256'] if batch else None,
         'variant': variant,
         'dataset_split': ('holdout' if scenario in SELECTION_HOLDOUT else 'development') if args.suite == 'selection-v1' else None,
         'model': args.model or 'CLI default: requires trace/config review', 'timeout': args.timeout,
@@ -1118,19 +1156,33 @@ def run_case_in_directory(args, source, variant, scenario, repetition, destinati
                        'Natural mode has no pinned entry; inferred selection and invisible loads require manual review.' if entry is None else 'Entry is pinned by fixture AGENTS; this is not a trigger benchmark.',
                        'Scenario 11 has no CodeGraph mock or live server: CodeGraph tool selection remains unverified.']})
     thread_id = None
+    execution_drift = []
     for turn, prompt in enumerate(prompts, 1):
         if turn == 3:
             (workspace / 'app.py').write_text('def clamp(value):\n    return value\n')
         if scenario == 'R03' and turn == 2:
             add_repeat_task(workspace)
+        if scenario in {'M06', 'M07'} and turn == 2:
+            observation_eval.add_second_task(workspace, scenario)
         (destination / f'prompt-{turn}.txt').write_text(prompt)
         trace_path = destination / f'trace-{turn}.jsonl'
         command = command_for(args, workspace, destination / f'final-{turn}.txt', scenario,
-                              None if scenario == 'R03' else thread_id)
+                              None if scenario in {'R03', 'M06', 'M07'} else thread_id)
         dump(destination / f'command-{turn}.json', command)
         dump(destination / f'before-{turn}.json', snapshot(workspace))
+        if batch:
+            observed = execution_identity(args)
+            dump(destination / f'execution-before-{turn}.json', observed)
+            expected = batch_execution_identity(batch)
+            changed = [key for key in expected if observed[key] != expected[key]]
+            if changed:
+                raise ValueError(f'execution conditions changed before turn {turn}: {", ".join(changed)}')
         run = run_process(command, workspace, prompt, trace_path,
                           destination / f'stderr-{turn}.log', args.timeout)
+        if batch:
+            observed = execution_identity(args)
+            dump(destination / f'execution-after-{turn}.json', observed)
+            execution_drift = [key for key in expected if observed[key] != expected[key]]
         trace = parse_trace(trace_path)
         command_evidence(trace, destination / f'commands-{turn}')
         runs.append(run)
@@ -1138,9 +1190,9 @@ def run_case_in_directory(args, source, variant, scenario, repetition, destinati
         turn_snapshot = snapshot(workspace)
         after_turns.append(turn_snapshot)
         dump(destination / f'after-{turn}.json', turn_snapshot)
-        if scenario == 'R03' and turn == 1:
+        if scenario in {'R03', 'M06', 'M07'} and turn == 1:
             shutil.copytree(workspace / '.aitasks', destination / 'memory-after-1', symlinks=True)
-        if run.get('exit_code') != 0 or run.get('timed_out') or not trace['completed_turns']:
+        if execution_drift or run.get('exit_code') != 0 or run.get('timed_out') or not trace['completed_turns']:
             break
         thread_id = trace['thread_id'] or thread_id
         if scenario in {'04', 'M02'} and not thread_id:
@@ -1148,20 +1200,28 @@ def run_case_in_directory(args, source, variant, scenario, repetition, destinati
     after = snapshot(workspace)
     dump(destination / 'after.json', after)
     shutil.copytree(workspace, destination / 'workspace', symlinks=True)
+    if batch:
+        verify_batch_sources(args.output, batch, variant)
+        if execution_drift:
+            raise ValueError(f'execution conditions changed during turn {len(runs)}: {", ".join(execution_drift)}')
     result = score(scenario, before, after, traces, runs,
-        (source / 'skills' / entry / 'SKILL.md').read_text() if entry else '', entry, args.external_skills, args.suite, workspace)
+        skill_bodies.get(entry, ''), entry, args.external_skills, args.suite, workspace)
     # Record observable full loads for every local Skill; missing proof is not proof of no load.
     result['local_skill_reads_proven'] = []
-    for path in sorted((source / 'skills').glob('*/SKILL.md')) if variant != 'no-skill' else []:
-        body = path.read_text().strip()
+    for name, body in sorted(skill_bodies.items()):
         commands = [command for trace in traces for command in trace['commands']]
-        if local_skill_read_proven(commands, workspace, path.parent.name, body):
-            result['local_skill_reads_proven'].append(path.parent.name)
+        if local_skill_read_proven(commands, workspace, name, body.strip()):
+            result['local_skill_reads_proven'].append(name)
     if len(runs) != len(prompts):
         result['execution'] = 'fail'
         result['acceptance'] = 'fail'
-    probe = (maintenance_check(scenario, workspace, before, after_turns[0] if after_turns else None)
-        if scenario == 'M02' else functional_check(scenario, workspace, files.get('.aitasks/todo.md')))
+    if scenario in {'M06', 'M07'}:
+        flow = observation_eval.check_flow(scenario, workspace, destination/'memory-after-1', traces,
+                                           before, after_turns[0] if after_turns else {}, after)
+        probe = {'status': flow['status'], 'memory_flow': flow}
+    else:
+        probe = (maintenance_check(scenario, workspace, before, after_turns[0] if after_turns else None)
+            if scenario == 'M02' else functional_check(scenario, workspace, files.get('.aitasks/todo.md')))
     if scenario == 'R03':
         flow = repeat_memory_check(workspace, destination / 'memory-after-1', traces)
         probe['memory_flow'] = flow
@@ -1170,6 +1230,7 @@ def run_case_in_directory(args, source, variant, scenario, repetition, destinati
         elif flow['status'] == 'unverified' and probe['status'] != 'fail':
             probe['status'] = 'unverified'
     result.update({'scenario': scenario, 'suite': args.suite, 'variant': variant, 'repetition': repetition,
+        'batch_id': batch['batch_id'] if batch else None,
         'dataset_split': ('holdout' if scenario in SELECTION_HOLDOUT else 'development') if args.suite == 'selection-v1' else None,
         'runs': runs, 'trace_summary': traces, 'contract_probe': probe})
     if result['contract_probe']['status'] == 'fail':
@@ -1191,6 +1252,165 @@ def prepare_output(output, suite):
     output.mkdir(parents=True, exist_ok=True)
     if not marker.exists():
         dump(marker, {'suite': suite, 'runner_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()})
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def runner_identity():
+    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+def runner_files():
+    return {name: hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
+            for name in ('behavior_eval.py', 'observation_eval.py')
+            for path in [Path(__file__).with_name(name)]}
+
+
+def cli_identity(executable):
+    resolved = shutil.which(str(executable))
+    if not resolved:
+        raise ValueError(f'CLI executable not found: {executable}')
+    path = Path(resolved).resolve()
+    return {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def source_identity(source):
+    source = Path(source)
+    files = snapshot(source / 'skills')
+    if not (source / 'skills').is_dir() or (source / 'skills').is_symlink() or any('symlink' in f for f in files.values()):
+        raise ValueError(f'batch sources must be complete local files without symlinks: {source}')
+    version = source / 'VERSION'
+    if version.is_symlink():
+        raise ValueError(f'batch VERSION must not be a symlink: {source}')
+    return {'skills': files, 'version_sha256': hashlib.sha256(version.read_bytes()).hexdigest() if version.exists() else None}
+
+
+def runtime_identity():
+    # Store hashes, never credentials/config contents. Effective model/provider still need review.
+    env = {k: v for k, v in os.environ.items() if k.startswith(('CODEX_', 'OPENAI_', 'AZURE_OPENAI_'))
+           or k in {'PATH', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'}}
+    home = Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex')))
+    configs = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
+               for p in (home / 'config.toml', home / 'AGENTS.md', home / 'AGENTS.override.md')}
+    return {'environment_sha256': digest(env), 'config_files': configs,
+            'rules': snapshot(home / 'rules'), 'python': sys.version, 'platform': list(os.uname())[:3]}
+
+
+def execution_identity(args):
+    return {'runner_files': runner_files(), 'cli': cli_identity(args.codex), 'runtime': runtime_identity()}
+
+
+def batch_execution_identity(batch):
+    return {key: batch['identity'][key] for key in ('runner_files', 'cli', 'runtime')}
+
+
+def execution_boundaries_match(instance, batch, result):
+    """Use archived observations; later upgrades must not invalidate historical runs."""
+    try:
+        expected = batch_execution_identity(batch)
+        runs = result.get('runs', [])
+        return bool(runs) and all(
+            json.loads((instance / f'execution-{boundary}-{turn}.json').read_text()) == expected
+            for turn in range(1, len(runs) + 1) for boundary in ('before', 'after'))
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
+def verify_batch_sources(output, batch, variant=None):
+    for name in ([variant] if variant and variant != 'no-skill' else ('baseline', 'candidate')):
+        if source_identity(output / '.sources' / name) != batch['identity']['sources'][name]:
+            raise ValueError(f'frozen {name} source changed; use a new batch')
+
+
+def read_batch(output):
+    path = output / 'batch.json'
+    if not path.exists():
+        return None
+    batch = json.loads(path.read_text())
+    if (batch.get('schema_version') != 1 or not batch.get('batch_id')
+            or digest(batch.get('identity')) != batch.get('identity_sha256')):
+        raise ValueError('invalid batch manifest; use a new output directory')
+    return batch
+
+
+def prepare_batch(args):
+    """Lock comparable conditions once; never promote historical evidence to a locked batch."""
+    output = args.output
+    batch = read_batch(output)
+    if batch is None and output.exists() and any(output.iterdir()):
+        raise ValueError('existing output has no locked batch identity; report it or use a new output directory')
+    identity = {'suite': args.suite, 'runner_sha256': runner_identity(), 'runner_files': runner_files(),
+        'sources': {name: source_identity(source) for name, source in
+                    (('baseline', args.baseline), ('candidate', args.candidate))},
+        'cli': cli_identity(args.codex), 'model': args.model, 'timeout': args.timeout,
+        'jobs': args.jobs, 'external_skill_disables': sorted(str(p) for p in args.external_skills),
+        'policy': 'workspace-write / approval never / ignore-user-config; no ignore-rules',
+        'variants': ['baseline', 'candidate'] + (['no-skill'] if args.include_no_skill else []),
+        'runtime': runtime_identity()}
+    if batch is not None:
+        if batch['identity'] != identity:
+            changed = [key for key in identity if identity[key] != batch['identity'].get(key)]
+            raise ValueError(f'batch conditions changed ({", ".join(changed)}); use a new output directory')
+        verify_batch_sources(output, batch)
+        return batch
+    output.mkdir(parents=True, exist_ok=True)
+    # An interrupted freeze is intentionally not reused. It cannot masquerade as a locked batch.
+    sources = output / '.sources'
+    sources.mkdir()
+    for name, source in (('baseline', args.baseline), ('candidate', args.candidate)):
+        freeze_source(source, sources / name)
+        if source_identity(source) != identity['sources'][name] or source_identity(sources / name) != identity['sources'][name]:
+            raise ValueError(f'{name} source changed while freezing; use a new output directory')
+    batch = {'schema_version': 1, 'batch_id': uuid.uuid4().hex, 'identity': identity,
+             'identity_sha256': digest(identity)}
+    prepare_output(output, args.suite)
+    dump(output / 'batch.json', batch)
+    return batch
+
+
+@contextmanager
+def batch_run_lock(output):
+    path = output / '.run.lock'
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise ValueError('batch is already running or has an interrupted lock; preserve it and use a new output directory')
+    try:
+        with os.fdopen(descriptor, 'w') as handle:
+            handle.write(str(os.getpid()))
+        yield
+    finally:
+        path.unlink()
+
+
+def register_batch_runs(output, batch, tasks):
+    """Persist expected pair members before launch, including members clipped by max-runs."""
+    path = output / 'planned-runs.json'
+    planned = json.loads(path.read_text()) if path.exists() else []
+    additions = {}
+    suite = batch['identity']['suite']
+    for _, variant, scenario, repetition in tasks:
+        name = SUITES[suite][scenario][0]
+        if (output / f'{scenario}-{name}' / f'{variant}-{repetition}').exists():
+            raise ValueError(f'run already exists: {scenario} {variant} {repetition}; existing evidence is retained')
+        for member in batch['identity']['variants']:
+            relative = f'{scenario}-{name}/{member}-{repetition}'
+            additions[relative] = {'path': relative, 'batch_id': batch['batch_id'], 'suite': suite,
+                'scenario': scenario, 'variant': member, 'repetition': repetition,
+                'dataset_split': ('holdout' if scenario in SELECTION_HOLDOUT else 'development') if suite == 'selection-v1' else None}
+    combined = {item['path']: item for item in planned}
+    combined.update(additions)
+    dump(path, [combined[key] for key in sorted(combined)])
+
+def required_machine_evidence_unverified(result):
+    # A bounded source probe may need semantic/browser review. Missing
+    # session identities, however, cannot be supplied by a review verdict.
+    return (result.get('readonly_boundary') == 'unverified'
+            or result.get('contract_probe', {}).get('required_evidence_unverified') is True
+            or result.get('contract_probe', {}).get('memory_flow', {}).get('status') == 'unverified')
+
 
 def independent_review(instance, result):
     """Validate separately authored judgments; never promote machine completion to a pass."""
@@ -1230,35 +1450,132 @@ def independent_review(instance, result):
             statuses.append(status)
         machine_failed = (result.get('acceptance') == 'fail' or result.get('execution') == 'fail'
                           or result.get('readonly_boundary') == 'fail' or result.get('contract_probe', {}).get('status') == 'fail')
+        machine_unverified = required_machine_evidence_unverified(result)
         status = ('fail' if machine_failed or 'fail' in statuses else
-                  'unverified' if result.get('execution') != 'completed' or 'unverified' in statuses else 'pass')
+                  'unverified' if result.get('execution') != 'completed' or machine_unverified
+                  or 'unverified' in statuses else 'pass')
         return {'status': status, 'reviewer': reviewer, 'dimensions': dimensions,
-                'source': 'review.json', 'machine_failure_preserved': machine_failed}
+                'source': 'review.json', 'machine_failure_preserved': machine_failed,
+                'machine_evidence_unverified': machine_unverified}
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         return {'status': 'invalid', 'source': 'review.json', 'reason': str(error)}
+
+
+def cost_metrics(result):
+    def total(values):
+        return sum(values) if values and all(type(v) in (int, float) and v >= 0 for v in values) else None
+    traces = result.get('trace_summary', [])
+    usage = [u for trace in traces for u in trace.get('usage', [])]
+    metrics = {'seconds': total([run.get('seconds') for run in result.get('runs', [])]),
+               'command_count': result.get('command_count')}
+    for key in ('input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens'):
+        metrics[key] = total([u.get(key) for u in usage]) if traces and all(t.get('usage') for t in traces) else None
+    return metrics
+
+
+def pair_reports(results, batch, batch_status):
+    grouped = {}
+    for result in results:
+        key = (result.get('batch_id'), result.get('suite', 'legacy'), result['scenario'],
+               result['repetition'], result.get('dataset_split'))
+        grouped.setdefault(key, {}).setdefault(result['variant'], []).append(result)
+    pairs = []
+    for key, members in sorted(grouped.items(), key=lambda item: tuple(str(x) for x in item[0])):
+        def member(name):
+            records = members.get(name, [])
+            if not records:
+                return {'execution': 'not_created', 'review': {'status': 'pending'}}
+            if len(records) != 1:
+                return {'execution': 'ambiguous', 'review': {'status': 'invalid'}}
+            return records[0]
+        sides = {name: member(name) for name in ('baseline', 'candidate')}
+        reasons = []
+        if batch_status != 'locked' or not batch or key[0] != batch['batch_id']:
+            reasons.append('batch identity is not locked and comparable')
+        for name, result in sides.items():
+            if result['execution'] != 'completed':
+                reasons.append(f'{name}: {result["execution"]}')
+            if (result.get('acceptance') == 'fail' or result.get('readonly_boundary') == 'fail'
+                    or result.get('contract_probe', {}).get('status') == 'fail'):
+                reasons.append(f'{name}: machine failure')
+            review = result.get('review', {})
+            if required_machine_evidence_unverified(result) or review.get('machine_evidence_unverified'):
+                reasons.append(f'{name}: required machine evidence is unverified')
+            dimensions = review.get('dimensions', {}) if review.get('status') not in {'invalid', 'pending'} else {}
+            for dimension in ('task_correctness', 'authorization', 'verification_accuracy', 'evaluation_validity'):
+                allowed = {'pass', 'not_applicable'} if dimension == 'verification_accuracy' else {'pass'}
+                if dimensions.get(dimension, {}).get('status') not in allowed:
+                    reasons.append(f'{name}: {dimension} lacks a trusted pass')
+            if not result.get('_batch_provenance'):
+                reasons.append(f'{name}: instance provenance is not verified')
+        comparison = {'status': 'ineligible' if reasons else 'eligible', 'reasons': reasons}
+        if not reasons:
+            metrics = {name: cost_metrics(result) for name, result in sides.items()}
+            comparison.update(metrics=metrics, candidate_minus_baseline={name:
+                metrics['candidate'][name] - value if value is not None and metrics['candidate'][name] is not None else None
+                for name, value in metrics['baseline'].items()},
+                interpretation='observed commands, elapsed seconds and CLI usage; not billed cost or proof of efficiency')
+        pair = {'batch_id': key[0], 'suite': key[1], 'scenario': key[2], 'repetition': key[3],
+                'dataset_split': key[4], 'members': {name: {'execution': r['execution'],
+                'review_status': r['review']['status']} for name, r in sides.items()}, 'comparison': comparison}
+        if 'no-skill' in members or (batch and key[0] == batch['batch_id'] and 'no-skill' in batch['identity']['variants']):
+            control = member('no-skill')
+            pair['no_skill'] = {'execution': control['execution'], 'review_status': control['review']['status'],
+                               'metrics': cost_metrics(control)}
+        pairs.append(pair)
+    return pairs
 
 
 def report(output):
     marker = output / 'suite.json'
     marker_suite = json.loads(marker.read_text())['suite'] if marker.exists() else None
+    batch, batch_status, batch_error = None, 'legacy_unlocked', None
+    try:
+        batch = read_batch(output)
+        if batch:
+            verify_batch_sources(output, batch)
+            batch_status = 'locked'
+    except (ValueError, OSError, KeyError, TypeError) as error:
+        batch_status, batch_error = 'invalid', str(error)
+    plan_path = output / 'planned-runs.json'
+    planned_runs = json.loads(plan_path.read_text()) if plan_path.exists() else []
+    plan_by_path = {item['path']: item for item in planned_runs}
     results = []
+    observed = set()
     for instance in sorted(path for path in output.glob('*/*') if path.is_dir()):
         result_path = instance / 'result.json'
         if result_path.exists():
             result = json.loads(result_path.read_text())
             result['review'] = independent_review(instance, result)
+            result['_batch_provenance'] = False
+            if batch_status == 'locked' and result.get('batch_id') == batch['batch_id']:
+                declaration_path = instance / 'predeclared.json'
+                declaration = json.loads(declaration_path.read_text()) if declaration_path.exists() else {}
+                expected = installed_profile(batch['identity']['sources'].get(result['variant'], {'skills': {}})['skills'],
+                                             result.get('suite', 'legacy'), result['scenario'])
+                result['_batch_provenance'] = (declaration.get('batch_id') == batch['batch_id']
+                    and declaration.get('batch_identity_sha256') == batch['identity_sha256']
+                    and declaration.get('source_skills') == expected
+                    and declaration.get('model') == (batch['identity']['model'] or 'CLI default: requires trace/config review')
+                    and declaration.get('timeout') == batch['identity']['timeout']
+                    and declaration.get('policy') == batch['identity']['policy']
+                    and sorted(declaration.get('external_skill_disables', [])) == batch['identity']['external_skill_disables']
+                    and execution_boundaries_match(instance, batch, result))
             results.append(result)
+            observed.add(str(instance.relative_to(output)))
             continue
         if not re.fullmatch(r'(?:baseline|candidate|no-skill)-[0-9]+', instance.name):
             continue
         declaration_path = instance / 'predeclared.json'
         declaration = json.loads(declaration_path.read_text()) if declaration_path.exists() else {}
+        declared = {**plan_by_path.get(str(instance.relative_to(output)), {}), **declaration}
         error_path = instance / 'runner-error.json'
         error = json.loads(error_path.read_text()) if error_path.exists() else None
         variant, repetition = instance.name.rsplit('-', 1)
-        result = {'suite': declaration.get('suite', marker_suite or 'legacy'),
-            'scenario': declaration.get('scenario', instance.parent.name.split('-', 1)[0]),
-            'dataset_split': declaration.get('dataset_split'),
+        result = {'suite': declared.get('suite', marker_suite or 'legacy'),
+            'batch_id': declared.get('batch_id', batch['batch_id'] if batch else None),
+            'scenario': declared.get('scenario', instance.parent.name.split('-', 1)[0]),
+            'dataset_split': declared.get('dataset_split'),
             'variant': variant, 'repetition': int(repetition),
             'execution': 'runner_error' if error is not None else 'incomplete',
             'target_skill_read_proven': None, 'readonly_boundary': 'unverified',
@@ -1266,12 +1583,28 @@ def report(output):
             'runner_error': error}
         result['review'] = independent_review(instance, result)
         results.append(result)
+        observed.add(str(instance.relative_to(output)))
+    for planned in planned_runs:
+        if planned['path'] not in observed:
+            results.append({**planned, 'execution': 'not_created', 'target_skill_read_proven': None,
+                'readonly_boundary': 'unverified', 'contract_probe': {'status': 'unverified'},
+                'command_count': None, 'review': {'status': 'pending'}})
     suites = {r.get('suite', 'legacy') for r in results}
     if marker_suite:
         suites.add(marker_suite)
     if len(suites) > 1:
         raise ValueError(f'cannot aggregate different suites: {sorted(suites)}')
+    pairs = pair_reports(results, batch, batch_status)
     summary = {'suite': next(iter(suites), None), 'scenario_runs': len(results), 'execution_completed': sum(r['execution'] == 'completed' for r in results),
+        'batch': {'status': batch_status, 'batch_id': batch['batch_id'] if batch else None,
+                  **({'reason': batch_error} if batch_error else {})},
+        'pairs': pairs,
+        'by_split': {split or 'unspecified': {'scenario_runs': sum(r.get('dataset_split') == split for r in results),
+            'pairs': sum(p['dataset_split'] == split for p in pairs),
+            'eligible_pairs': sum(p['dataset_split'] == split and p['comparison']['status'] == 'eligible' for p in pairs),
+            'incomplete_pairs': sum(p['dataset_split'] == split and any(m['execution'] != 'completed' for m in p['members'].values()) for p in pairs)}
+            for split in sorted({r.get('dataset_split') for r in results}, key=str)},
+        'execution_not_created': sum(r['execution'] == 'not_created' for r in results),
         'execution_incomplete': sum(r['execution'] == 'incomplete' for r in results),
         'execution_runner_error': sum(r['execution'] == 'runner_error' for r in results),
         'target_read_proven': sum(r['target_skill_read_proven'] is True for r in results),
@@ -1286,7 +1619,7 @@ def report(output):
         'behavior_acceptance': 'machine completion is not semantic acceptance; see separately attributed per-instance reviews',
         'runs': [{'suite': r.get('suite', 'legacy'), **{key: r[key] for key in ('scenario', 'variant', 'repetition', 'execution',
                  'target_skill_read_proven', 'readonly_boundary', 'contract_probe', 'command_count')},
-                 'dataset_split': r.get('dataset_split'), 'review': r['review'],
+                 'batch_id': r.get('batch_id'), 'dataset_split': r.get('dataset_split'), 'review': r['review'],
                  'local_skill_reads_proven': r.get('local_skill_reads_proven', []),
                  **({'runner_error': r['runner_error']} if r.get('runner_error') is not None else {})} for r in results]}
     dump(output / 'summary.json', summary)
@@ -1348,9 +1681,12 @@ def main():
             parser.error(f'missing skills directory: {source}')
     args.external_skills = discover_external_skills()
     try:
-        prepare_output(args.output, args.suite)
-    except ValueError as error:
+        args.batch = prepare_batch(args)
+    except (ValueError, OSError) as error:
         parser.error(str(error))
+    args.baseline = args.output / '.sources/baseline'
+    args.candidate = args.output / '.sources/candidate'
+    args.codex = args.batch['identity']['cli']['path']
     tasks = []
     for repetition in range(1, args.repetitions + 1):
         variants = [('baseline', args.baseline), ('candidate', args.candidate)]
@@ -1363,6 +1699,15 @@ def main():
                 tasks.append((source.resolve() if source is not None else None, variant, scenario, repetition))
     if args.max_runs:
         tasks = tasks[:args.max_runs]
+    try:
+        with batch_run_lock(args.output):
+            register_batch_runs(args.output, args.batch, tasks)
+            execute_batch(args, tasks)
+    except ValueError as error:
+        parser.error(str(error))
+
+
+def execute_batch(args, tasks):
     with ThreadPoolExecutor(max_workers=args.jobs) as executor:
         futures = {}
         errors = []

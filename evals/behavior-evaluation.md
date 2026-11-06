@@ -37,6 +37,22 @@ python3 evals/behavior_eval.py report --output .aitasks/evaluations/1.6.0/full
 
 脚本使用 `workspace-write` 与 `approval never`，不会绕过沙箱或 execpolicy。每次调用 `--ignore-user-config`，认证沿用 CLI 自身登录状态。不要假设这与桌面会话使用同一模型：应从同环境的 CLI runtime header 核实默认模型、provider、reasoning effort，并保留日志；必要时对两侧使用相同 `--model`。失败或超时保存已有 stdout/stderr，不自动重试。
 
+## 批次身份与成对摘要
+
+新批次的 `batch.json` 固定运行器及评分模块摘要、两版完整源包、CLI 可执行文件、模型参数、timeout、并发、外部 Skill 禁用清单和可见运行配置。环境与配置只保存摘要，不保存凭据正文。两版分别锁定，不要求 baseline 与 candidate 内容相同。
+
+启动时复制两版到输出目录 `.sources/`，核对复制前后摘要，执行者使用该私有冻结副本；每次实例还检查安装内容，避免工作区漂移。相同条件可追加未创建的场景；运行器、源码或配置改变时使用新输出目录。已有实例不可覆盖，并发执行同一批次会拒绝。CLI 可执行文件摘要未必覆盖其全部外部依赖，配置摘要也不证明所有隐式上下文已隔离。
+
+每次 CLI 调用前后还保存 `execution-before-N.json` / `execution-after-N.json`，复用批次中的运行器、CLI 和运行配置摘要。调用前发现漂移时不启动；调用后发现漂移时保留轨迹、观测与最终工作区，标为 `runner_error`。报告核对归档观测，不读取当前机器的运行条件；缺少观测的旧实例仍可汇总，但不作为可信成本配对。边界采样不能证明调用期间从未短暂变化，仍须复核实际模型与隐式上下文。
+
+历史 suite-only 目录允许汇总，不允许追加后冒充锁定批次；原 `result.json` 和 trace 不回写。`planned-runs.json` 保存计划成员，摘要按 batch、suite、scenario、repetition、split 配对：
+
+- `not_created`、`incomplete`、`runner_error` 和失败均保留，半组不会消失。
+- 无技能对照单列；开发集和保留集分别汇总，不合并为一个效果数字。
+- 只有双方完成、正确性/授权/验证真实性合格、环境及实例身份可核对的配对才计算命令数、秒数和 CLI usage 差值。
+- 必要的只读或独立会话证据缺失时不比较成本；纯建议性维度可为不适用，流程低效的样本仍保留，避免先筛掉低效结果。
+- 未验证或不合格的配对列出原因，不输出提升率。usage 与耗时均为观测值，不直接当成账单或稳定收益。
+
 ## 场景与预声明标准
 
 | ID | 任务 | 必须人工核实的关键行为 |
@@ -60,6 +76,27 @@ python3 evals/behavior_eval.py report --output .aitasks/evaluations/1.6.0/full
 
 `maintenance-v1` 是独立的五组自动维护对照，不修改上述历史场景。M01 检查不指定入口的代码编辑仍完成一条 todo；M02 在同一持久会话两次实质提出问题，第一次不记录、第二次沉淀一条经验；M03 首次明确要求即记录；M04 从 19 条近期已完成 todo 起步，完成本任务后达到 20 条容量阈值，检查最旧记录完整归档且移出活动文件，其余原记录内容和顺序不变；M05 显式只读，检查所有文件保持不变。它们在项目 `AGENTS.md` 中提供自动维护规则，但不指定工程入口。行为结果仍需人工复核实际 Skill 加载、记录内容和无关操作；本地规则触发的表现不能外推到未安装或未配置该规则的项目。
 
+### 当前观察规则：maintenance-v2
+
+历史 M02 要求第一轮所有文件不变，与当前允许首次观察落盘的规则不同；其定义和历史结果保留，不再用它验收当前自动观察工作流。新版独立场景如下：
+
+| ID | 请求与安装条件 | 有限探针及需要复核的内容 |
+| --- | --- | --- |
+| M06 | 分别分析 CSV、JSON 导出偏移丢失；两个全新会话，允许观察/经验写入但不改代码 | 首次一条观察、无经验/todo；第二次同因复用签名、两个任务 ID、关联一条经验。原因和经验质量另作语义复核 |
+| M07 | 第二个导出问题来自上游解析，而非导出器去掉时区 | 两个不同签名各为一次观察，不提前沉淀；不能只凭相同症状认定同因。签名不同本身不证明语义正确 |
+| M08 | 只安装 `code-review`，缺少可选的维护 Skill；明确只读 | 全工作区保持只读；人工/Agent 核对有界文本回退、有效经验和当前契约，不虚构工具结果 |
+
+M06/M07 是两个独立分析任务，不 resume、不共享聊天记录；工程规则明确本任务允许观察/经验写入，使用独立分析任务 ID，不为维护本身创建 todo。第一轮只允许观察文件和持久锁 guard 的变化；第二轮只允许当前任务需要的经验、观察和维护状态变化。Harness 在第二轮前追加原始问题代码，探针独立核对分析者没有改代码或其他文件。任一会话 ID 缺失保留 `unverified`，相同 ID 失败。明确只读场景仍严格禁止观察写入。
+
+```bash
+python3 -B evals/behavior_eval.py run --suite maintenance-v2 \
+  --baseline /absolute/path/to/frozen-baseline \
+  --candidate /absolute/path/to/frozen-candidate \
+  --output /absolute/path/to/new-output --repetitions 1 --jobs 2
+```
+
+这是当前观察规则和可选工具回退的定向验收；不将它改名复用为旧 M02，也不由探针通过直接推断 Skill 有净收益。
+
 M04 探针以本次运行创建时的原始 todo 文本为基准，独立核对完整元数据和正文，不加载被测版本的解析器，也不按评分当天重新生成基准。仅保留标题、正文丢失、元数据变化或把归档写在代码围栏中均失败。最终文件只能证明内容状态，不能证明先归档后删除的执行顺序；`archive_order=unverified` 需结合工具轨迹另行判断，旧结果不回写。
 
 ```bash
@@ -72,7 +109,7 @@ python3 evals/behavior_eval.py run --suite maintenance-v1 \
 
 ## Skill 加载和环境边界
 
-每个 fixture 复制被测版本的全部 `skills/` 到本地 `.agents/skills/`。固定入口套件的 `AGENTS.md` 指定入口；自然套件不指定入口，`maintenance-v1` 只提供项目级维护规则。前者不能证明原生 Skill 自动触发准确率，后者也不能证明缺少项目规则时的自动触发或其他 Harness 的表现。
+默认 fixture 复制被测版本的全部 `skills/` 到本地 `.agents/skills/`；M08 按固定 profile 只复制 `code-review`，无技能对照不复制。固定入口套件的 `AGENTS.md` 指定入口；自然套件不指定入口，`maintenance-v1` 只提供项目级维护规则。前者不能证明原生 Skill 自动触发准确率，后者也不能证明缺少项目规则时的自动触发或其他 Harness 的表现。
 
 脚本枚举 `~/.agents/skills`、`~/.codex/skills`、`~/.codex/plugins/cache`、`/etc/codex/skills` 下的 `SKILL.md`，通过单次 `skills.config=[{path="/absolute/path/SKILL.md",enabled=false}]` 禁用外部 Skill，记录完整文件清单，不改磁盘配置。`0.163.0` 的本机 prompt 审计发现目录路径无效，改为文件路径后只剩十个项目 Skill，与[官方 Skill 配置示例](https://learn.chatgpt.com/docs/build-skills)一致。其他安装位置、插件工具、父目录或用户规则仍需核实；同名 Skill 不会自动合并，不能假定项目版自动覆盖用户版。
 
@@ -101,6 +138,7 @@ R03 独立探针核对两个导出契约、首次不写正式经验、跨会话�
 
 - `predeclared.json`：请求、标准、Skill 内容哈希、fixture commit、配置和限制。
 - `prompt-N.txt`、`command-N.json`、`trace-N.jsonl`、`stderr-N.log`、`final-N.txt`：原始执行证据。
+- `execution-before-N.json`、`execution-after-N.json`：锁定批次每次调用边界的运行条件摘要，不保存配置或凭据正文。
 - `before.json`、`after.json` 及每轮快照：全部文件内容哈希、权限与符号链接，包含 ignored/untracked 文件。
 - `result.json`：运行状态、命令摘要、目标读取证据、文件变化和独立契约探针。
 - `runner-error.json`：运行器异常导致实例无法产出结果时，尽可能保存异常类型和原因；原始材料仍保留。
@@ -166,7 +204,7 @@ python3 -B evals/behavior_eval.py run --suite selection-v1 --split holdout \
 
 `--include-no-skill` 在 baseline/candidate 之外增加 `no-skill` 对照：不创建本地 `.agents/skills/`，`source=null`、`source_skills={}`，保持同一任务材料和项目规则。已知外部 Skill 仍按相同配置禁用；这只表示没有安装本仓库源包，不能证明模型的所有隐式上下文已隔离。选项只允许 `natural-v2`、`selection-v1` 和 `frontend-ui-v1` 中未指定入口的 F01–F04；带强制维护规则或固定入口的场景在创建运行目录前拒绝。
 
-三方对照每次重复包含三个实例，`--max-runs` 仍按实例计数，可能截断一个配对组；不完整组不能用于成本比较。旧套件默认仍为两方对照。保留集划分只是一项运行约定，脚本不会隐藏公开 fixture 或阻止人为重复运行；若用保留集结果调整候选，应将该集合视为开发材料并另建最终验收场景。显式 `--scenarios S07` 也会标记为 holdout，不改变其身份。
+三方对照每次重复包含三个实例，`--max-runs` 仍按实例计数，可能截断一个配对组。缺少基线或候选时不比较两者成本；缺少无技能对照时不作三方对照结论，仍可报告满足条件的完整基线/候选配对。旧套件默认仍为两方对照。保留集划分只是一项运行约定，脚本不会隐藏公开 fixture 或阻止人为重复运行；若用保留集结果调整候选，应将该集合视为开发材料并另建最终验收场景。显式 `--scenarios S07` 也会标记为 holdout，不改变其身份。
 
 先核对任务正确性、只读边界和验证真实性，再比较实际选择、无关加载、重复命令、工具输出与 usage。`local_skill_reads_proven=[]` 表示缺少可证明的完整读取，不等于未加载。人工复核可依据可见证据记录选择及理由，不强制所有正确任务具有唯一技能路由，也不把无技能对照不能加载技能判为失败。开发与保留集分别报告，不混算提升率。
 

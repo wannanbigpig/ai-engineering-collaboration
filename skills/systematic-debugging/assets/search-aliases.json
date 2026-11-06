@@ -1,0 +1,7 @@
+[
+  ["timeout", "超时"],
+  ["retry", "retries", "重试"],
+  ["timezone", "时区"],
+  ["idempotency", "幂等"],
+  ["refund", "退款"]
+]

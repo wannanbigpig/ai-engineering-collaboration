@@ -298,6 +298,40 @@ class MemoryWorkflowTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(path.read_bytes(), original)
 
+    def test_upsert_multiline_field_roundtrips_with_notes_and_following_record(self):
+        resolution = "```md\n## Example\n- 原因：example\n```"
+        note = "补充笔记：保留上游兼容。\n\n- 补充做法：Keep this independent note."
+        path = self.records / "lessons.md"
+        for newline in ("\n", "\r\n"):
+            for existing_field in (False, True):
+                with self.subTest(newline=repr(newline), existing_field=existing_field):
+                    original = (
+                        "<!-- aitasks:lesson id=old created_at=2026-11-04 last_used_at=- use_count=0 pinned=false -->\n"
+                        "## Date offset\n\n- 场景：Date export\n- 问题：Offset lost\n"
+                        "- 原因：Conversion removed offset\n"
+                        + ("- 正确做法：Old resolution\n" if existing_field else "")
+                        + "- 适用范围：Export module\n\n" + note + "\n\n"
+                    )
+                    following = self.lesson("other", "Keep the following record")
+                    path.write_bytes((original + following).replace("\n", newline).encode())
+                    other_before = self.result("get-record", "--kind", "lesson", "--id", "other")
+
+                    updated = self.result("upsert-lesson", "--explicit", "--id", "old",
+                                          *self.lesson_args(resolution))
+                    self.assertEqual((updated["id"], updated["action"]), ("old", "updated"))
+                    detail = self.result("get-record", "--kind", "lesson", "--id", "old", "--max-chars", "10000")
+                    self.assertIn(resolution.replace("\n", newline), detail["content"])
+                    self.assertIn(note.replace("\n", newline), detail["content"])
+                    self.assertFalse(detail["truncated"])
+                    self.assertNotIn("Keep the following record", detail["content"])
+                    other_after = self.result("get-record", "--kind", "lesson", "--id", "other")
+                    self.assertEqual(other_after["content"], other_before["content"])
+                    self.assertFalse(other_after["truncated"])
+                    content = path.read_bytes()
+                    self.assertTrue(content.endswith(following.replace("\n", newline).encode()))
+                    if newline == "\r\n":
+                        self.assertNotIn(b"\n", content.replace(b"\r\n", b""))
+
     def test_usage_is_counted_once_per_task_even_when_tasks_interleave(self):
         created = self.result("upsert-lesson", "--explicit", *self.lesson_args())
         for task in ("task-a", "task-b", "task-a", "task-b"):
@@ -441,7 +475,8 @@ class MemoryWorkflowTest(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("memory_recovery", SCRIPT)
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
+        with mock.patch.object(sys, "path", [str(SCRIPT.parent), *sys.path]):
+            spec.loader.exec_module(module)
         write = module.atomic_write
         def fail_link(path, content, **kwargs):
             if path.name == ".observations.json":

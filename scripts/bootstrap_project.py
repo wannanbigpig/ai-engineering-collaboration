@@ -290,12 +290,18 @@ def matches_upgrade_baseline(destination: Path, name: str, baseline_skills: Path
 def describe_skill(path: Path, manifest: dict[str, str] | None) -> dict:
     skill_file = path / "SKILL.md"
     version = None
+    diagnostics = []
     if skill_file.is_file():
-        version = re.search(r"^  version: (.+)$", skill_file.read_text(encoding="utf-8"), re.MULTILINE)
+        try:
+            version = re.search(r"^  version: (.+)$", skill_file.read_text(encoding="utf-8"), re.MULTILINE)
+        except UnicodeDecodeError as error:
+            diagnostics.append({"code": "invalid_utf8", "path": str(skill_file),
+                                "message": f"Cannot read SKILL.md as UTF-8: {error}"})
     return {
         "path": str(path),
         "resolved_path": str(path.resolve()) if path.exists() else None,
         "version": version.group(1) if version else None,
+        "diagnostics": diagnostics,
         "manifest_sha256": hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         if manifest is not None else None,
     }
@@ -317,6 +323,7 @@ def check_installation(target: Path, user_scope: bool, json_output: bool = False
         skill = {"name": source.name, "status": status,
                  "source": describe_skill(source, source_manifest),
                  "installed": describe_skill(installed, installed_manifest), "compatibility": []}
+        different |= bool(skill["source"]["diagnostics"] or skill["installed"]["diagnostics"])
         for harness, directory in COMPATIBILITY_SKILL_DIRS:
             path = target / directory / "skills" / source.name
             current = ((path.is_symlink() and path.resolve() == installed.resolve() and installed.is_dir())
@@ -338,6 +345,9 @@ def check_installation(target: Path, user_scope: bool, json_output: bool = False
         for skill in skills:
             print(f"{skill['name']}: {skill['status']} (installed={skill['installed']['version'] or '-'}, "
                   f"source={skill['source']['version'] or '-'})")
+            for location in ("source", "installed"):
+                for diagnostic in skill[location]["diagnostics"]:
+                    print(f"  {location}: {diagnostic['message']} at {diagnostic['path']}")
             for link in skill["compatibility"]:
                 if link["status"] != "current":
                     print(f"  {link['harness']}: missing or different at {link['path']}")
@@ -356,18 +366,20 @@ def report_skill_conflicts(conflicts: list[str]) -> int:
 def copy_skills(install_sources: list[Path], destination_root: Path) -> None:
     for source in install_sources:
         destination = destination_root / source.name
-        if not destination.exists():
-            shutil.copytree(source, destination, ignore=DISTRIBUTION_IGNORE)
-            continue
-        staging = Path(tempfile.mkdtemp(prefix=f".{source.name}-upgrade-", dir=destination_root))
+        upgrading = destination.exists()
+        destination_root.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f".{source.name}-install-", dir=destination_root))
         backup = staging / "previous"
         completed = False
         try:
             shutil.copytree(source, staging / "new", ignore=DISTRIBUTION_IGNORE)
-            destination.replace(backup)
+            if upgrading:
+                destination.replace(backup)
             (staging / "new").replace(destination)
             completed = True
         except OSError as error:
+            if not upgrading:
+                raise BootstrapError(f"Install failed; no Skill installed at {destination}: {error}") from error
             if backup.exists():
                 try:
                     backup.replace(destination)
@@ -430,6 +442,10 @@ def compatibility_link_plan(
 
 def create_compatibility_links(links: list[Path], harness: str, canonical_skills: Path) -> None:
     for link in links:
+        # Different Harness paths can resolve to one shared discovery directory.
+        # A prior plan may therefore have created this exact managed link.
+        if link.is_symlink() and link.resolve() == (canonical_skills / link.name).resolve():
+            continue
         if link.is_dir() and not link.is_symlink():
             copy_skills([canonical_skills / link.name], link.parent)
             continue

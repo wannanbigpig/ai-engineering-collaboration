@@ -1,4 +1,5 @@
 import importlib.util
+import copy
 from contextlib import redirect_stdout
 import io
 import json
@@ -17,6 +18,48 @@ SPEC.loader.exec_module(eval_tool)
 
 
 class BehaviorEvaluationTests(unittest.TestCase):
+    def test_pair_cost_gate_preserves_required_evidence_without_blocking_advisory_review(self):
+        batch = {'batch_id': 'batch', 'identity': {'variants': ['baseline', 'candidate']}}
+        for boundary, probe, expected in (
+                ('pass', {'status': 'unverified'}, 'eligible'),
+                ('pass', {'status': 'unverified', 'required_evidence_unverified': True}, 'ineligible'),
+                ('unverified', {'status': 'pass'}, 'ineligible'),
+                ('pass', {'status': 'unverified', 'memory_flow': {'status': 'unverified'}}, 'ineligible')):
+            with self.subTest(boundary=boundary, probe=probe):
+                results = [{'batch_id': 'batch', 'suite': 'memory-v2', 'scenario': 'R03',
+                    'variant': variant, 'repetition': 1, 'execution': 'completed',
+                    'readonly_boundary': boundary, 'contract_probe': probe,
+                    '_batch_provenance': True, 'review': {'status': 'unverified',
+                    'dimensions': {name: {'status': 'fail' if name == 'process_efficiency' else 'pass'}
+                                   for name in eval_tool.REVIEW_DIMENSIONS}}}
+                    for variant in ('baseline', 'candidate')]
+                pair = eval_tool.pair_reports(results, batch, 'locked')[0]
+                self.assertEqual(pair['comparison']['status'], expected)
+
+    def test_review_cannot_promote_unverified_required_machine_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            instance = Path(directory)
+            (instance / 'trace.txt').write_text('Observed run evidence\n')
+            review = {'schema_version': 1, 'reviewer': {'kind': 'agent', 'id': 'reviewer'},
+                      'dimensions': {name: {'status': 'pass', 'reason': 'Reviewed the trace',
+                                           'evidence': [{'path': 'trace.txt', 'line': 1}]}
+                                     for name in eval_tool.REVIEW_DIMENSIONS}}
+            (instance / 'review.json').write_text(json.dumps(review))
+            for probe, expected in (({'status': 'pass'}, 'pass'),
+                                    ({'status': 'not_applicable'}, 'pass'),
+                                    ({'status': 'unverified'}, 'pass'),
+                                    ({'status': 'unverified', 'required_evidence_unverified': True}, 'unverified'),
+                                    ({'status': 'unverified', 'memory_flow': {'status': 'unverified'}}, 'unverified'),
+                                    ({'status': 'fail'}, 'fail')):
+                with self.subTest(probe=probe):
+                    machine = {'execution': 'completed', 'acceptance': 'unverified',
+                               'readonly_boundary': 'not_applicable',
+                               'contract_probe': probe}
+                    original = copy.deepcopy(machine)
+                    result = eval_tool.independent_review(instance, machine)
+                    self.assertEqual(result['status'], expected)
+                    self.assertEqual(machine, original)
+
     def test_repeat_memory_requires_both_thread_identities(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -931,6 +974,258 @@ finally:
                 eval_tool.prepare_output(output, 'review-v2')
             self.assertFalse((output/'suite.json').exists())
             eval_tool.prepare_output(output, 'legacy')
+
+
+class BatchEvaluationTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.source = self.root/'source'
+        skill = self.source/'skills/code-review/SKILL.md'
+        skill.parent.mkdir(parents=True)
+        skill.write_text('Original standalone skill\n')
+        (self.source/'VERSION').write_text('1.0\n')
+        self.args = SimpleNamespace(output=self.root/'out', suite='selection-v1',
+            baseline=self.source, candidate=self.source, codex='fake-codex', model='test-model',
+            timeout=5, external_skills=[], jobs=1, include_no_skill=False)
+        self.cli = patch.object(eval_tool, 'cli_identity', create=True,
+            return_value={'path': '/test/codex', 'sha256': 'cli-v1'})
+        self.cli.start()
+        self.addCleanup(self.cli.stop)
+
+    def test_batch_freezes_full_sources_and_rejects_changed_conditions(self):
+        first = eval_tool.prepare_batch(self.args)
+        marker = (self.args.output/'batch.json').read_bytes()
+        frozen = self.args.output/'.sources/candidate/skills/code-review/SKILL.md'
+        self.assertEqual(frozen.read_text(), 'Original standalone skill\n')
+        self.assertEqual(eval_tool.prepare_batch(self.args)['batch_id'], first['batch_id'])
+        for field, value in [('model', 'other'), ('timeout', 6), ('jobs', 2),
+                             ('include_no_skill', True), ('external_skills', [Path('/disabled/SKILL.md')])]:
+            changed = copy.copy(self.args)
+            setattr(changed, field, value)
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                eval_tool.prepare_batch(changed)
+            self.assertEqual((self.args.output/'batch.json').read_bytes(), marker)
+        (self.source/'skills/code-review/SKILL.md').write_text('Changed source\n')
+        self.assertEqual(frozen.read_text(), 'Original standalone skill\n')
+        eval_tool.verify_batch_sources(self.args.output, first)
+        with self.assertRaises(ValueError):
+            eval_tool.prepare_batch(self.args)
+        self.assertEqual((self.args.output/'batch.json').read_bytes(), marker)
+
+    def test_each_cli_call_rejects_drift_and_retains_the_observed_run(self):
+        batch = eval_tool.prepare_batch(self.args)
+        self.args.batch = batch
+        for field in ('cli', 'runtime', 'runner_files'):
+            with self.subTest(field=field):
+                output = self.args.output / field
+                output.mkdir()
+                args = copy.copy(self.args)
+                args.output = output
+                shutil.copytree(self.args.output / '.sources', output / '.sources')
+                identity = {'cli': batch['identity']['cli'], 'runtime': batch['identity']['runtime'],
+                            'runner_files': batch['identity']['runner_files']}
+                calls = []
+                def completed(command, workspace, prompt, stdout, stderr, timeout):
+                    calls.append(command)
+                    stdout.write_text(json.dumps({'type': 'turn.completed', 'usage': {}})+'\n')
+                    stderr.write_text('')
+                    identity[field] = {'changed': True}
+                    return {'exit_code': 0, 'timed_out': False, 'seconds': 1}
+                with patch.object(eval_tool, 'cli_identity', side_effect=lambda _: identity['cli']), \
+                     patch.object(eval_tool, 'runtime_identity', side_effect=lambda: identity['runtime']), \
+                     patch.object(eval_tool, 'runner_files', side_effect=lambda: identity['runner_files']), \
+                     patch.object(eval_tool, 'run_process', side_effect=completed):
+                    with self.assertRaisesRegex(ValueError, 'execution conditions changed'):
+                        eval_tool.run_case(args, output/'.sources/baseline', 'baseline', 'S01', 1)
+                    instance = output/'S01-explain/baseline-1'
+                    self.assertTrue((instance/'trace-1.jsonl').is_file())
+                    self.assertTrue((instance/'workspace/labels.py').is_file())
+                    self.assertTrue((instance/'execution-before-1.json').is_file())
+                    self.assertTrue((instance/'execution-after-1.json').is_file())
+                    self.assertTrue((instance/'runner-error.json').is_file())
+                    self.assertFalse((instance/'result.json').exists())
+                    with self.assertRaisesRegex(ValueError, 'execution conditions changed'):
+                        eval_tool.run_case(args, output/'.sources/candidate', 'candidate', 'S01', 1)
+                    self.assertEqual(len(calls), 1)
+
+    def test_batch_rejects_runner_cli_and_frozen_source_drift(self):
+        batch = eval_tool.prepare_batch(self.args)
+        with patch.object(eval_tool, 'runner_identity', return_value='changed-runner'):
+            with self.assertRaises(ValueError):
+                eval_tool.prepare_batch(self.args)
+        with patch.object(eval_tool, 'cli_identity', return_value={'path': '/test/codex', 'sha256': 'cli-v2'}):
+            with self.assertRaises(ValueError):
+                eval_tool.prepare_batch(self.args)
+        with patch.object(eval_tool, 'runner_files', return_value={'observation_eval.py': 'changed-helper'}):
+            with self.assertRaises(ValueError):
+                eval_tool.prepare_batch(self.args)
+        with patch.object(eval_tool, 'runtime_identity', return_value={'environment_sha256': 'changed-runtime'}):
+            with self.assertRaises(ValueError):
+                eval_tool.prepare_batch(self.args)
+        (self.args.output/'.sources/baseline/skills/code-review/SKILL.md').write_text('Tampered\n')
+        with self.assertRaises(ValueError):
+            eval_tool.verify_batch_sources(self.args.output, batch)
+        with self.assertRaises(ValueError):
+            eval_tool.prepare_batch(self.args)
+
+    def test_legacy_output_can_report_but_cannot_be_promoted_to_locked_batch(self):
+        eval_tool.prepare_output(self.args.output, 'selection-v1')
+        marker = (self.args.output/'suite.json').read_bytes()
+        self.assertEqual(eval_tool.report(self.args.output)['batch']['status'], 'legacy_unlocked')
+        with self.assertRaises(ValueError):
+            eval_tool.prepare_batch(self.args)
+        self.assertEqual((self.args.output/'suite.json').read_bytes(), marker)
+        self.assertFalse((self.args.output/'batch.json').exists())
+
+    def test_source_links_and_drift_during_freeze_fail_before_batch_is_locked(self):
+        link = self.source/'skills/code-review/outside'
+        link.symlink_to(self.root/'outside')
+        with self.assertRaises(ValueError):
+            eval_tool.prepare_batch(self.args)
+        link.unlink()
+        original = eval_tool.freeze_source
+        def changing(source, destination):
+            original(source, destination)
+            (self.source/'skills/code-review/SKILL.md').write_text('Changed during freeze\n')
+        with patch.object(eval_tool, 'freeze_source', side_effect=changing):
+            with self.assertRaises(ValueError):
+                eval_tool.prepare_batch(self.args)
+        self.assertFalse((self.args.output/'batch.json').exists())
+
+    def result(self, batch, scenario, variant, *, efficiency='pass', correctness='pass', batch_id=None):
+        name = eval_tool.SUITES['selection-v1'][scenario][0]
+        instance = self.args.output/f'{scenario}-{name}'/f'{variant}-1'
+        instance.mkdir(parents=True)
+        result = {'suite': 'selection-v1', 'scenario': scenario, 'variant': variant, 'repetition': 1,
+            'batch_id': batch_id or batch['batch_id'],
+            'dataset_split': 'holdout' if scenario in eval_tool.SELECTION_HOLDOUT else 'development',
+            'execution': 'completed', 'acceptance': 'unverified', 'target_skill_read_proven': None,
+            'readonly_boundary': 'pass', 'contract_probe': {'status': 'not_applicable'}, 'command_count': 3,
+            'runs': [{'seconds': 2}], 'trace_summary': [{'usage': [{'input_tokens': 10, 'output_tokens': 4}]}]}
+        (instance/'result.json').write_text(json.dumps(result))
+        (instance/'trace-1.jsonl').write_text('evidence\n')
+        declaration = {'batch_id': batch['batch_id'], 'batch_identity_sha256': batch['identity_sha256'],
+            'source_skills': batch['identity']['sources'][variant]['skills'],
+            'model': self.args.model, 'timeout': self.args.timeout,
+            'policy': batch['identity']['policy'], 'external_skill_disables': []}
+        (instance/'predeclared.json').write_text(json.dumps(declaration))
+        identity = {key: batch['identity'][key] for key in ('runner_files', 'cli', 'runtime')}
+        for boundary in ('before', 'after'):
+            (instance/f'execution-{boundary}-1.json').write_text(json.dumps(identity))
+        review = {'schema_version': 1, 'reviewer': {'kind': 'agent', 'id': 'test'},
+            'dimensions': {name: {'status': 'pass', 'reason': 'Observed',
+                'evidence': [{'path': 'trace-1.jsonl', 'line': 1}]} for name in eval_tool.REVIEW_DIMENSIONS}}
+        review['dimensions']['process_efficiency']['status'] = efficiency
+        review['dimensions']['task_correctness']['status'] = correctness
+        (instance/'review.json').write_text(json.dumps(review))
+        return instance
+
+    def test_cost_provenance_requires_archived_execution_boundaries_not_current_runtime(self):
+        batch = eval_tool.prepare_batch(self.args)
+        for variant in ('baseline', 'candidate'):
+            self.result(batch, 'S01', variant)
+        with patch.object(eval_tool, 'runtime_identity', side_effect=AssertionError('must not inspect current runtime')):
+            self.assertEqual(eval_tool.report(self.args.output)['pairs'][0]['comparison']['status'], 'eligible')
+        path = self.args.output/'S01-explain/candidate-1/execution-after-1.json'
+        original = path.read_bytes()
+        path.unlink()
+        self.assertEqual(eval_tool.report(self.args.output)['pairs'][0]['comparison']['status'], 'ineligible')
+        path.write_text('{}')
+        self.assertEqual(eval_tool.report(self.args.output)['pairs'][0]['comparison']['status'], 'ineligible')
+        path.write_bytes(original)
+        self.assertEqual(eval_tool.report(self.args.output)['pairs'][0]['comparison']['status'], 'eligible')
+
+    def test_pairs_keep_failed_and_uncreated_members_and_separate_splits(self):
+        batch = eval_tool.prepare_batch(self.args)
+        tasks = [(self.source, variant, scenario, 1) for scenario in ('S01', 'S07')
+                 for variant in ('baseline', 'candidate')]
+        eval_tool.register_batch_runs(self.args.output, batch, tasks)
+        a = self.result(batch, 'S01', 'baseline', efficiency='fail')
+        b = self.result(batch, 'S01', 'candidate')
+        self.result(batch, 'S07', 'baseline', correctness='fail')
+        originals = [(p, p.read_bytes()) for p in self.args.output.glob('*/*/result.json')]
+        summary = eval_tool.report(self.args.output)
+        self.assertEqual(summary['scenario_runs'], 4)
+        self.assertEqual(summary['execution_not_created'], 1)
+        self.assertEqual(summary['pairs'][0]['comparison']['status'], 'eligible')
+        self.assertEqual(summary['pairs'][0]['comparison']['metrics']['baseline']['seconds'], 2)
+        self.assertEqual(summary['pairs'][0]['comparison']['metrics']['candidate']['input_tokens'], 10)
+        self.assertEqual(summary['pairs'][1]['comparison']['status'], 'ineligible')
+        self.assertEqual(summary['pairs'][1]['members']['candidate']['execution'], 'not_created')
+        self.assertEqual(summary['by_split']['development']['scenario_runs'], 2)
+        self.assertEqual(summary['by_split']['holdout']['scenario_runs'], 2)
+        for path, contents in originals:
+            self.assertEqual(path.read_bytes(), contents)
+        with self.assertRaises(ValueError):
+            eval_tool.register_batch_runs(self.args.output, batch, [(self.source, 'baseline', 'S01', 1)])
+        eval_tool.register_batch_runs(self.args.output, batch, [(self.source, 'baseline', 'S03', 1)])
+        self.assertEqual(len(json.loads((self.args.output/'planned-runs.json').read_text())), 6)
+        self.assertEqual(eval_tool.prepare_batch(self.args)['batch_id'], batch['batch_id'])
+
+    def test_pair_costs_require_trusted_validity_and_batch_provenance(self):
+        batch = eval_tool.prepare_batch(self.args)
+        for variant in ('baseline', 'candidate'):
+            self.result(batch, 'S01', variant, batch_id='foreign' if variant == 'candidate' else None)
+        summary = eval_tool.report(self.args.output)
+        self.assertTrue(all(p['comparison']['status'] == 'ineligible' for p in summary['pairs']))
+        path = self.args.output/'S01-explain/candidate-1/result.json'
+        data = json.loads(path.read_text()); data['batch_id'] = batch['batch_id']; path.write_text(json.dumps(data))
+        review_path = path.parent/'review.json'
+        review = json.loads(review_path.read_text())
+        review['dimensions']['evaluation_validity']['status'] = 'unverified'
+        review_path.write_text(json.dumps(review))
+        summary = eval_tool.report(self.args.output)
+        self.assertEqual(summary['pairs'][0]['comparison']['status'], 'ineligible')
+
+    def test_early_runner_error_keeps_planned_split_and_pair_identity(self):
+        batch = eval_tool.prepare_batch(self.args)
+        eval_tool.register_batch_runs(self.args.output, batch, [(self.source, 'baseline', 'S07', 1)])
+        self.result(batch, 'S07', 'baseline')
+        failed = self.args.output/'S07-go-review/candidate-1'
+        failed.mkdir(parents=True)
+        (failed/'runner-error.json').write_text('{"error_type":"OSError","message":"before declaration"}')
+        summary = eval_tool.report(self.args.output)
+        self.assertEqual(len(summary['pairs']), 1)
+        self.assertEqual(summary['pairs'][0]['dataset_split'], 'holdout')
+        self.assertEqual(summary['pairs'][0]['members']['candidate']['execution'], 'runner_error')
+        self.assertEqual(summary['by_split']['holdout']['scenario_runs'], 2)
+
+    def test_no_skill_is_separate_control_and_missing_metric_is_not_zero(self):
+        self.args.include_no_skill = True
+        batch = eval_tool.prepare_batch(self.args)
+        eval_tool.register_batch_runs(self.args.output, batch, [(self.source, 'baseline', 'S01', 1)])
+        for variant in ('baseline', 'candidate'):
+            p = self.result(batch, 'S01', variant)
+            result = json.loads((p/'result.json').read_text())
+            result['trace_summary'] = [{'usage': [{}]}]
+            (p/'result.json').write_text(json.dumps(result))
+        summary = eval_tool.report(self.args.output)
+        pair = summary['pairs'][0]
+        self.assertEqual(pair['comparison']['status'], 'eligible')
+        self.assertEqual(pair['no_skill']['execution'], 'not_created')
+        self.assertIsNone(pair['comparison']['metrics']['baseline']['input_tokens'])
+
+    def test_main_runs_frozen_sources_even_when_original_changes_between_variants(self):
+        seen = []
+        def completed(command, workspace, prompt, stdout, stderr, timeout):
+            seen.append((workspace/'.agents/skills/code-review/SKILL.md').read_text())
+            (self.source/'skills/code-review/SKILL.md').write_text('Concurrent source edit\n')
+            stdout.write_text(json.dumps({'type': 'turn.completed', 'usage': {}}) + '\n')
+            stderr.write_text('')
+            return {'exit_code': 0, 'timed_out': False, 'seconds': 1}
+        argv = ['behavior_eval', 'run', '--suite', 'selection-v1', '--scenarios', 'S01',
+                '--baseline', str(self.source), '--candidate', str(self.source),
+                '--output', str(self.args.output), '--repetitions', '1', '--model', 'test-model']
+        with patch.object(sys, 'argv', argv), patch.object(eval_tool, 'discover_external_skills', return_value=[]), \
+             patch.object(eval_tool, 'run_process', side_effect=completed), redirect_stdout(io.StringIO()):
+            eval_tool.main()
+        self.assertEqual(seen, ['Original standalone skill\n', 'Original standalone skill\n'])
+        summary = json.loads((self.args.output/'summary.json').read_text())
+        self.assertEqual(summary['execution_completed'], 2)
+        self.assertEqual(summary['batch']['status'], 'locked')
+        self.assertEqual(summary['pairs'][0]['comparison']['status'], 'ineligible')
 
 
 if __name__ == '__main__':

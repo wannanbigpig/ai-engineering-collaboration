@@ -121,6 +121,46 @@ class PackageSkillsTest(unittest.TestCase):
         self.assertIn("missing resource", result.stderr)
         self.assertFalse(destination.exists())
 
+    def test_shipped_query_consumers_run_alone_from_release_archives(self):
+        repository = SCRIPT.resolve().parents[1]
+        release = self.root.parent / 'actual-release'
+        result = subprocess.run([sys.executable, '-B', str(SCRIPT), '--output', str(release)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        version = (repository / 'VERSION').read_text().strip()
+        for name in ('ai-engineering-collaboration', 'code-review', 'systematic-debugging', 'change-impact-analysis'):
+            with self.subTest(skill=name):
+                isolated = self.root.parent / name
+                with ZipFile(release / f'{name}-{version}.zip') as zipped:
+                    zipped.extractall(isolated / 'skill')
+                project = isolated / 'project'
+                records = project / '.aitasks'
+                records.mkdir(parents=True)
+                (records / 'lessons.md').write_text(
+                    '# Lessons\n\n## Legacy invoice\nKeep invoice formatting.\n\n'
+                    '<!-- aitasks:lesson id=old status=retired -->\n## Old invoice\nINACTIVE_SENTINEL\n\n'
+                    '<!-- aitasks:lesson id=current status=active -->\n## Current invoice\nInvoice format.\n\n'
+                    '```markdown\n<!-- aitasks:lesson id=fake status=retired -->\n## Example\n```\n'
+                    'CURRENT_END\n\n<!-- aitasks:lesson id=next status=active -->\n## Other\nNEXT_SENTINEL\n')
+                snapshot = lambda: {str(p.relative_to(isolated)): p.read_bytes()
+                                    for p in isolated.rglob('*') if p.is_file()}
+                before = snapshot()
+                command = [sys.executable, '-B', str(isolated / 'skill/scripts/query_aitasks.py'),
+                           '--project-root', str(project)]
+                context = subprocess.run(command + ['context', '--query', 'invoice'], capture_output=True, text=True)
+                self.assertEqual(context.returncode, 0, context.stderr)
+                summaries = json.loads(context.stdout)['lessons']
+                self.assertEqual(len(summaries), 2)
+                self.assertIn('current', {row['id'] for row in summaries})
+                self.assertNotIn('INACTIVE_SENTINEL', context.stdout)
+                detail = subprocess.run(command + ['get-record', '--kind', 'lesson', '--id', 'current'],
+                                        capture_output=True, text=True)
+                self.assertEqual(detail.returncode, 0, detail.stderr)
+                content = json.loads(detail.stdout)['content']
+                self.assertIn('CURRENT_END', content)
+                self.assertNotIn('NEXT_SENTINEL', content)
+                self.assertEqual(snapshot(), before)
+                self.assertFalse((isolated / 'skill/scripts/maintain_aitasks.py').exists())
     def test_source_links_and_output_inside_skill_are_rejected(self):
         destination = self.root.parent / "release"
         external = self.root.parent / "outside.txt"

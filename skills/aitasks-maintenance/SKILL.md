@@ -4,7 +4,7 @@ description: "代码编辑任务自动记录 todo，重复问题自动沉淀经�
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.12
+  version: 1.7.14
 ---
 
 # `.aitasks` 维护
@@ -21,7 +21,7 @@ metadata:
 
 - 普通查询直接按[只读查询](references/query.md)调用 `context`，按 ID 读必要正文；默认预算可按证据需要扩大，不一次性加载全部记录。`--since` 仅复用本会话已读内容，新会话重新取摘要。工具扩展少量常用中英文别名，活动经验弱匹配时也回查归档。
 - 恢复 todo 可用有界 `list-todos --query …`，按 ID 复用。新建用 `add-todo --maintain --json`，直接保存返回的 ID；完成用 `finish-todo --id … --result … --json` 一次更新结果、可选验证、状态并检查阈值。
-- 根因确认且允许写入时，先 `find-observations --query "模块 症状 原因"` 取候选。同模块、症状及原因均吻合才复用原 key；没有同因候选才新建稳定 key，不因词命中自动合并。每个独立任务使用自己的 todo ID，同任务重试复用 ID。
+- 根因确认且允许写入时，先 `find-observations --query "模块 症状 原因"` 取候选。同模块、症状及原因均吻合才复用原 key；没有同因候选才新建稳定 key，不因词命中自动合并。每个独立任务使用稳定的任务 ID，已有 todo 时复用其 ID，同任务重试不换 ID；仅获授权维护经验的诊断不为观察额外建 todo。
 - 实际帮助解决问题后才 `mark-used --id … --task-id … --maintain`，同任务重复调用不加次数。查询、读取和未采用的候选不计。`upsert-lesson`、完成命令及带 `--maintain` 的写入已检查阈值，无需再跑 `status`；手工或旧命令写入后补检查，先归档再移出，不删除归档。
 - 新证据证明经验失效时，用 `set-lesson-status --id … --status retired --reason …` 停用；被已有新经验替代用 `superseded --superseded-by …`。默认查询排除这两类，按 ID 仍可审计并可恢复 `active`；不因年代久或已归档自动判失效。
 - `.aitasks/` 首次创建前按 [维护参考](references/maintenance.md#首次创建与忽略规则) 核对忽略规则。新建命令要求该目录已存在且非软链接，不修改 `.gitignore`。

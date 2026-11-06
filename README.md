@@ -2,7 +2,7 @@
 
 一组面向真实工程任务的可组合 Agent Skills。单一明确任务直接处理或使用对应专项；需要跨多个专项阶段时，再使用 `ai-engineering-collaboration` 统筹。
 
-当前源码版本：[1.7.12](VERSION)，共 11 个 Skill。源码版本、已安装副本和当前会话实际加载的版本分别核对。
+当前源码版本：[1.7.14](VERSION)，共 11 个 Skill。源码版本、已安装副本和当前会话实际加载的版本分别核对。
 
 ## 从任务开始
 
@@ -35,7 +35,7 @@
 
 | 目标 | 方式 | 前置条件与写入范围 |
 | --- | --- | --- |
-| 安装选定技能和客户端 | [skills CLI](docs/project-bootstrap.md#通过-skills-cli-安装) | 示例固定 `skills@1.7.6`，要求 Node.js ≥22.20.0；目录由作用域及 Agent 参数决定 |
+| 为选定客户端安装技能 | [skills CLI](docs/project-bootstrap.md#通过-skills-cli-安装) | 安装 CLI 固定为 `skills@1.7.6`，与本仓库版本分别管理；要求 Node.js ≥22.20.0 |
 | 当前用户安装全部技能 | `bootstrap --scope user` | Python 3.9+；写入 `~/.agents/skills/` 和兼容软链接 |
 | 初始化单个项目 | `bootstrap --target …` | Python 3.9+；管理项目技能、兼容入口、`AGENTS.md` 受管区块，并按条件更新 `.gitignore` |
 
@@ -44,7 +44,8 @@
 npx skills@1.7.6 add wannanbigpig/ai-engineering-collaboration --list
 npx skills@1.7.6 add wannanbigpig/ai-engineering-collaboration --skill code-review --agent codex
 
-# 已克隆本仓库：预览用户级完整安装；核对输出后去掉 --dry-run
+# 以下 Python 命令均在克隆后的本仓库根目录执行
+# 预览用户级完整安装；核对输出后去掉 --dry-run
 python3 -B scripts/bootstrap_project.py --scope user --dry-run
 
 # 或预览单个项目初始化
@@ -53,7 +54,9 @@ python3 -B scripts/bootstrap_project.py --target /absolute/path/to/project --dry
 
 脚本默认拒绝覆盖不同的同名 Skill，已有定制须先核对；检查及基线升级见[安装说明](docs/project-bootstrap.md#检查与显式升级)。`skills` CLI 与 bootstrap 不互相接管安装所有权。卸载应限定本仓库来源或明确的 Skill 名，不使用全局 `remove --all`。
 
-每个 Skill 的本地资源随自身目录分发。只读经验查询可发现已安装的 `aitasks-maintenance` 并读取其短参考；未安装时定向读取少量有效记录，不要求兄弟目录存在。使用本仓库工程入口编辑代码或配置下述工程默认指令时，需要让 `aitasks-maintenance` 可被当前客户端发现；其他专项可按需安装。
+安装器需要 Python 3.9+；随包的查询与维护工具需要 Python 3.10+。Skill 正文本身不依赖 Python，工具不可用时按对应 Skill 的手工或降级说明执行。
+
+每个 Skill 的本地资源随自身目录分发。工程入口、审查、调试及影响分析包自带同源只读查询脚本，缺少维护 Skill 时可独立查询，不要求兄弟目录存在；无 Python 时仅取标题与元数据线索，未核实正文保持未验证。使用本仓库工程入口编辑代码或配置下述工程默认指令时，需要让 `aitasks-maintenance` 可被当前客户端发现；只读工具不包含任务和经验写入能力，其他专项可按需安装。
 
 安装后刷新或重启会话，点名核对技能是否可发现。`agents/openai.yaml` 是可选 Codex UI 元数据，其他 Harness 可忽略；兼容状态见[验证说明](docs/verification.md#兼容与生效矩阵)。
 
@@ -84,6 +87,8 @@ python3 -B scripts/bootstrap_project.py --print-custom-instructions
 
 ## 验证与分发
 
+完整校验需要 Python 3.10+、Git 和 `uvx`；以下命令也在本仓库根目录执行。
+
 ```bash
 # 版本、独立包资源、官方结构校验、差异检查和全部单测；必要步骤失败即非零退出
 python3 -B scripts/validate_repository.py --tests
@@ -98,7 +103,9 @@ python3 -B scripts/bootstrap_project.py --scope user --check --json
 python3 -B scripts/package_skills.py --output /absolute/path/to/new-release-directory
 ```
 
-本地脚本、CI 矩阵和真实行为验收的边界见[验证说明](docs/verification.md)。最新优化、测试方法对照与实际失败见 [1.7.12 报告](evals/reports/1.7.12.md)，历史记忆结果见 [1.7.10 报告](evals/reports/1.7.10-memory-workflow.md)；运行方法见[行为评测](evals/behavior-evaluation.md)。报告中的失败和未验证项保留，不能将静态通过当作自然触发或视觉效果通过。
+最新结构修复、真实失败及新前向样本见 [1.7.14 复查报告](evals/reports/1.7.14-team-review.md)。验证边界与 CI 矩阵见[验证说明](docs/verification.md)，真实场景运行方法见[行为评测](evals/behavior-evaluation.md)。报告保留失败和未验证项，不能将静态通过当作自然触发或视觉效果通过。
+
+历史记录：[1.7.13 工具与观察评测](evals/reports/1.7.13.md)、[1.7.13 团队复查](evals/reports/1.7.13-team-review.md)、[1.7.12 测试方法](evals/reports/1.7.12.md)、[1.7.10 记忆流程](evals/reports/1.7.10-memory-workflow.md)。
 
 ```text
 skills/       # 可独立安装的技能、资源与可选脚本

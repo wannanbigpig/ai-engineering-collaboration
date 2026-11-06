@@ -122,7 +122,9 @@ python3 scripts/bootstrap_project.py --scope user --upgrade-from /absolute/path/
 
 复制、比较和升级统一排除 `__pycache__`、`*.pyc`、`.DS_Store`；真实资源和权限仍参与比较，资源软链接在写入前拒绝。`--check --json` 的 `schema_version=1` 报告源码仓库、规范安装目录、每个 Skill 的源码/安装版本、原路径/真实路径、manifest 摘要及各兼容入口状态；`different` 只表示内容不一致，不能单凭它断言存在用户定制。`--json` 仅与 `--check` 使用，不能混入打印全局指令。
 
-每个 Skill 先复制到临时目录再替换，失败时恢复该 Skill 的旧副本；恢复失败会保留备份并报告路径。跨多个 Skill 的 I/O 失败可能留下部分升级，修复后可用同一基线重试。检查只证明磁盘副本及入口匹配，不证明 Harness 已加载；实际升级后仍需刷新会话。用户级操作不修改项目规则或客户端全局指令。
+`source` 和 `installed` 各有 `diagnostics` 数组；`SKILL.md` 不是有效 UTF-8 时，记录 `code=invalid_utf8`、文件路径和可读错误，版本为 `null`，仍保留原始字节算出的 manifest 摘要、内容状态和其余 Skill 报告。检查返回 `1`，默认文本模式也显示诊断，原文件保持不变。
+
+初装和升级都先将每个 Skill 完整复制到目标目录旁的临时目录，再发布到正式路径。初装复制或发布失败会清理暂存内容，不留下该 Skill 的半成品，可直接重试；升级失败时恢复该 Skill 的旧副本，恢复失败会保留备份并报告路径。跨多个 Skill 的 I/O 失败可能留下已完成的安装或升级；修复故障后可重试，升级仍使用同一基线。检查只证明磁盘副本及入口匹配，不证明 Harness 已加载；实际升级后仍需刷新会话。用户级操作不修改项目规则或客户端全局指令。
 
 ## Codex Custom Instructions
 
