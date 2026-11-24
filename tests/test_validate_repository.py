@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
 import importlib.util
+from io import StringIO
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/validate_repository.py"
@@ -26,6 +28,14 @@ class RepositoryValidationTest(unittest.TestCase):
         self.skill.mkdir(parents=True)
         self.write_skill()
 
+    def validation_errors(self):
+        _, errors = self.validator.inspect_skills(self.root)
+        return errors
+
+    def validate_example_repository(self, *args):
+        with patch.object(self.validator, "RELEASE_SKILLS", {"example"}):
+            return self.validator.main(["--root", str(self.root), *args])
+
     def write_skill(self, version="1.2.3", body=""):
         (self.skill / "SKILL.md").write_text(
             f"---\nname: example\ndescription: An example.\nmetadata:\n  version: {version}\n---\n\n{body}\n"
@@ -34,15 +44,58 @@ class RepositoryValidationTest(unittest.TestCase):
     def test_version_failure_is_not_masked_by_later_success(self):
         self.write_skill(version="1.2.2")
         with patch.object(self.validator, "run_check", return_value=0) as external:
-            self.assertEqual(self.validator.main(["--root", str(self.root)]), 1)
+            self.assertEqual(self.validate_example_repository(), 1)
         external.assert_not_called()
 
     def test_valid_resources_stay_valid_in_a_standalone_skill(self):
         resource = self.skill / "references/example.md"
         resource.parent.mkdir()
         resource.write_text("# Example\n")
-        self.write_skill(body="[Example](references/example.md#example) and [Web](https://example.com).")
-        self.assertEqual(self.validator.check_packages(self.root), [])
+        (self.skill / "icon.png").write_bytes(b"\x89PNG")
+        self.write_skill(body="[Example](references/example.md#example) ![Icon](icon.png) [Web](https://example.com).")
+        with patch.object(Path, "read_bytes", side_effect=AssertionError("Only Markdown content is needed")):
+            self.assertEqual(self.validation_errors(), [])
+
+    def test_symlinked_skill_content_is_rejected(self):
+        (self.skill / "linked-file").symlink_to(self.root / "VERSION")
+        errors = self.validation_errors()
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("Symlinked skill content", errors[0])
+
+    def test_only_direct_metadata_version_counts(self):
+        entry = self.skill / "SKILL.md"
+        for metadata in ("", "other:\n  version: 1.2.3\n",
+                         "metadata:\n  nested:\n    version: 1.2.3\n"):
+            with self.subTest(metadata=metadata):
+                entry.write_text(f"---\nname: example\n{metadata}---\n\n  version: 1.2.3\n")
+                self.assertTrue(self.validation_errors())
+        entry.write_text("---\nname: example\nmetadata:\n  version: '1.2.3' # release\n---\n")
+        self.assertEqual(self.validation_errors(), [])
+
+    def test_duplicate_metadata_keys_and_versions_are_rejected(self):
+        entry = self.skill / "SKILL.md"
+        cases = (
+            ("metadata:\n  version: 1.2.3\n'metadata': {}\n", "metadata"),
+            ("metadata:\n  version: 1.2.3\n  \"version\" : 1.2.2\n", "metadata.version"),
+            ("metadata:\n  version: []\n  version: 1.2.3\n", "metadata.version"),
+        )
+        for metadata, key in cases:
+            with self.subTest(key=key, metadata=metadata):
+                entry.write_text(f"---\nname: example\n{metadata}---\n")
+                self.assertEqual(len(errors := self.validation_errors()), 1, errors)
+                self.assertIn(f"duplicate frontmatter {key} key", errors[0])
+
+    def test_cli_requires_the_expected_release_skill_inventory(self):
+        (self.root / "skills/other").mkdir()
+        (self.root / "skills/other/SKILL.md").write_text(
+            "---\nname: other\nmetadata:\n  version: 1.2.3\n---\n"
+        )
+        _, errors = self.validator.inspect_skills(self.root, expected_names={"example", "ci-triage"})
+        self.assertEqual(errors, ["Missing release Skill: ci-triage", "Unexpected release Skill: other"])
+        with patch.object(self.validator, "RELEASE_SKILLS", {"example", "ci-triage"}), \
+                patch.object(self.validator, "run_check") as external:
+            self.assertEqual(self.validator.main(["--root", str(self.root), "--offline"]), 1)
+        external.assert_not_called()
 
     def test_missing_and_cross_package_resources_fail(self):
         sibling = self.root / "skills/other/references/example.md"
@@ -52,7 +105,7 @@ class RepositoryValidationTest(unittest.TestCase):
             "---\nname: other\ndescription: Another.\nmetadata:\n  version: 1.2.3\n---\n"
         )
         self.write_skill(body="[Other](../other/references/example.md)\n[Missing](assets/missing.json)")
-        errors = self.validator.check_packages(self.root)
+        errors = self.validation_errors()
         self.assertTrue(any("outside" in error for error in errors), errors)
         self.assertTrue(any("missing" in error for error in errors), errors)
 
@@ -61,7 +114,7 @@ class RepositoryValidationTest(unittest.TestCase):
         resource.parent.mkdir()
         resource.write_text("[Missing](missing.md)\n")
         self.write_skill(body="[Example](references/example.md)")
-        self.assertTrue(self.validator.check_packages(self.root))
+        self.assertTrue(self.validation_errors())
 
     def test_repository_validation_rejects_drift_in_generated_query_tools(self):
         owner = self.root / 'skills/aitasks-maintenance'
@@ -75,45 +128,46 @@ class RepositoryValidationTest(unittest.TestCase):
             for path in (owner / relative, consumer / relative):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(body)
-        self.assertEqual(self.validator.check_packages(self.root), [])
+        self.assertEqual(self.validation_errors(), [])
         (consumer / 'scripts/query_aitasks.py').write_text('print("different parser")\n')
-        errors = self.validator.check_packages(self.root)
+        errors = self.validation_errors()
         self.assertTrue(any('generated content or permissions differ' in error for error in errors), errors)
 
     def test_existing_but_excluded_resource_cannot_pass_standalone_validation(self):
-        resource = self.skill / "scripts/tool.pyc"
-        resource.parent.mkdir()
-        resource.write_bytes(b"compiled resource")
-        self.write_skill(body="[Runtime](scripts/tool.pyc)")
-        errors = self.validator.check_packages(self.root)
-        self.assertEqual(len(errors), 1, errors)
-        self.assertIn("resource is excluded from distribution: scripts/tool.pyc", errors[0])
+        for name in ("metadata.json", "scripts/metadata.json", "scripts/__pypackages__/example.py", ".git/config"):
+            with self.subTest(name=name):
+                resource = self.skill / name
+                resource.parent.mkdir(parents=True, exist_ok=True)
+                resource.write_bytes(b"excluded resource")
+                self.write_skill(body=f"[Runtime]({name})")
+                self.assertEqual(len(errors := self.validation_errors()), 1, errors)
+                self.assertIn(f"resource is excluded from distribution: {name}", errors[0])
 
     def test_excluded_markdown_is_not_part_of_the_package_validation(self):
         cached = self.skill / "__pycache__/stale.md"
         cached.parent.mkdir()
         cached.write_text("[Old link](missing.md)\n")
-        self.assertEqual(self.validator.check_packages(self.root), [])
+        self.assertEqual(self.validation_errors(), [])
 
     def test_directory_links_require_actual_distributed_descendants(self):
         (self.skill / "references/empty").mkdir(parents=True)
         (self.skill / "__pycache__/nested").mkdir(parents=True)
         (self.skill / "references/guide.md").write_text("# Guide\n")
         self.write_skill(body="[Examples](references/)")
-        self.assertEqual(self.validator.check_packages(self.root), [])
+        self.assertEqual(self.validation_errors(), [])
         self.write_skill(body="[Examples](references/empty/)")
-        errors = self.validator.check_packages(self.root)
+        errors = self.validation_errors()
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("directory has no distributed files: references/empty/", errors[0])
-        filtered = self.skill / "references/filtered/tool.pyc"
+        filtered = self.skill / "references/filtered/metadata.json"
         filtered.parent.mkdir()
         filtered.write_bytes(b"compiled resource")
         self.write_skill(body="[Runtime](references/filtered/)")
-        errors = self.validator.check_packages(self.root)
+        errors = self.validation_errors()
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("directory has no distributed files: references/filtered/", errors[0])
         self.write_skill(body="[Cache](__pycache__/nested/)")
-        errors = self.validator.check_packages(self.root)
+        errors = self.validation_errors()
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("directory has no distributed files: __pycache__/nested/", errors[0])
 
@@ -126,15 +180,15 @@ class RepositoryValidationTest(unittest.TestCase):
         self.write_skill(body='[Example](references/example.md "Usage guide")\n'
                               '[Guide](<references/guide with spaces.md> "A second guide")\n'
                               '[Numbered](references/example(1).md)')
-        self.assertEqual(self.validator.check_packages(self.root), [])
+        self.assertEqual(self.validation_errors(), [])
 
     def test_fenced_and_inline_code_examples_are_not_resource_links(self):
         self.write_skill(body='```markdown\n[Example](missing-in-fence.md)\n```\n'
                               '~~~markdown\n[Reference][sample]\n[sample]: ../other/SKILL.md\n~~~\n'
                               '`[Example](missing-inline.md)`\n')
-        self.assertEqual(self.validator.check_packages(self.root), [])
+        self.assertEqual(self.validation_errors(), [])
         self.write_skill(body='`[Example](missing-inline.md)`\n[Actual](missing-real.md)\n')
-        errors = self.validator.check_packages(self.root)
+        errors = self.validation_errors()
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("missing-real.md", errors[0])
 
@@ -143,35 +197,51 @@ class RepositoryValidationTest(unittest.TestCase):
         sibling.mkdir()
         (sibling / "SKILL.md").write_text("---\nname: other\nmetadata:\n  version: 1.2.3\n---\n")
         self.write_skill(body='[Other][GUIDE]\n\n[guide]: ../other/SKILL.md "Other Skill"\n')
-        errors = self.validator.check_packages(self.root)
+        errors = self.validation_errors()
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("outside standalone package", errors[0])
+        entry = self.skill / "SKILL.md"
+        entry.write_bytes(entry.read_bytes().replace(b"\n", b"\r\n"))
+        self.assertEqual(self.validation_errors(), errors)
 
     def test_staged_whitespace_is_not_masked_by_clean_worktree(self):
         subprocess.run(["git", "init", "-q", str(self.root)], check=True, capture_output=True)
         self.write_skill(body="Staged trailing whitespace. ")
         subprocess.run(["git", "-C", str(self.root), "add", "."], check=True, capture_output=True)
-        self.assertNotEqual(self.validator.main(["--root", str(self.root), "--offline"]), 0)
+        self.assertNotEqual(self.validate_example_repository("--offline"), 0)
 
     def test_collapsed_and_shortcut_references_resolve_only_used_definitions(self):
         resource = self.skill / "guide.md"
         resource.write_text("# Guide\n")
         self.write_skill(body='[GUIDE][] and [guide].\n\n[guide]: guide.md\n[unused]: missing.md\n')
-        self.assertEqual(self.validator.check_packages(self.root), [])
+        self.assertEqual(self.validation_errors(), [])
         resource.unlink()
-        errors = self.validator.check_packages(self.root)
+        errors = self.validation_errors()
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("missing resource: guide.md", errors[0])
 
     def test_validator_failure_stops_before_tests(self):
         with patch.object(self.validator, "run_check", return_value=7) as external:
-            self.assertEqual(self.validator.main(["--root", str(self.root), "--tests"]), 7)
+            self.assertEqual(self.validate_example_repository("--tests"), 7)
         self.assertEqual(external.call_count, 1)
+
+    def test_offline_tests_skip_only_the_external_schema_check(self):
+        expected = [
+            call(["git", "diff", "--check"], self.root.resolve()),
+            call(["git", "diff", "--cached", "--check"], self.root.resolve()),
+            call([sys.executable, "-B", "-m", "unittest", "discover", "-s", "tests"], self.root.resolve()),
+        ]
+        for checks, status in (([0, 0, 0], 0), ([0, 0, 7], 7), ([8], 8)):
+            with self.subTest(checks=checks), redirect_stdout(StringIO()) as output, \
+                    patch.object(self.validator, "run_check", side_effect=checks) as run:
+                self.assertEqual(self.validate_example_repository("--offline", "--tests"), status)
+                self.assertIn("Agent Skills schema validation: NOT RUN (--offline)", output.getvalue())
+                self.assertEqual(run.call_args_list, expected[:len(checks)])
 
     def test_empty_skill_inventory_and_missing_version_fail(self):
         (self.skill / "SKILL.md").unlink()
         (self.root / "VERSION").unlink()
-        self.assertGreaterEqual(len(self.validator.check_packages(self.root)), 2)
+        self.assertGreaterEqual(len(self.validation_errors()), 2)
 
 
 if __name__ == "__main__":

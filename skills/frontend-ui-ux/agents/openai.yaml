@@ -1,4 +1,4 @@
 interface:
   display_name: "前端界面设计与体验"
-  short_description: "把界面设计落实为可运行页面、所需交互和真实渲染复查，保留现有功能与规范"
-  default_prompt: "使用 $frontend-ui-ux 完成本次界面设计或优化；需要实施时交付可运行页面，并检查主流程和渲染结果。"
+  short_description: "只读评估界面，或按授权落实可运行页面并复查真实交互与渲染"
+  default_prompt: "使用 $frontend-ui-ux 完成本次界面任务。只读评估按授权观察并给出建议。获准实施时交付可运行页面并检查主流程和渲染结果。"

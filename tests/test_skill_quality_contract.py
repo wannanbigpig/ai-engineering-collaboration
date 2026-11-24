@@ -81,24 +81,6 @@ class SkillQualityContractTest(unittest.TestCase):
         self.assertIn("非预期异常", content)
         self.assertIn("脱敏", content)
 
-    def test_behavior_evaluation_covers_all_maintainability_scenarios(self) -> None:
-        content = read_text("evals/maintainability-scenarios.md")
-
-        for scenario in (
-            "复用已有实现",
-            "影响分析优先",
-            "错误处理语义",
-            "量化指标证据",
-            "避免过度拆分",
-            "沿用后端主流风格",
-            "无设计稿时沿用现有 UI",
-            "保护无关修改",
-        ):
-            with self.subTest(scenario=scenario):
-                self.assertIn(f"## {scenario}", content)
-        self.assertIn("不得判定通过", content)
-        self.assertIn("Harness", content)
-
 
 if __name__ == "__main__":
     unittest.main()

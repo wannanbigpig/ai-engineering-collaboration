@@ -4,7 +4,7 @@ description: "统筹确需跨多个专项阶段的工程任务；用户明确指
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.15
+  version: 1.7.16
 ---
 
 # AI 工程协作
@@ -27,7 +27,25 @@ metadata:
 
 ## 规则发现与澄清
 
-1. 读取适用路径规则，复用未变内容；隐藏规则同样适用。项目有 `.aitasks/` 时，先从当前可发现的 Skill 中定位可选的 `aitasks-maintenance`，存在才读取其目录内的 `references/query.md`，不加载维护流程或假定相邻安装。未安装或不支持只读查询时，用本 Skill 自带的[只读查询脚本](scripts/query_aitasks.py)：`python3 -B "<skill-dir>/scripts/query_aitasks.py" --project-root "<project-root>" context --query "模块 符号 错误码"`，按返回 ID 用 `get-record --kind lesson --id …`（todo 用 `--kind todo`）取必要正文，由脚本处理状态与围栏边界。Python 不可用时只取少量标题及所属元数据定位线索，无法核实的正文与适用性标为未验证，依据当前代码取证，不临时编写经验解析器。经验只作线索，关键事实仍核对当前环境。不整篇读经验或 todo。任务开始、范围变化或新根因确认时查，同会话复用未变结果，新会话重新查询；证据不足可扩大预算。
+1. 读取适用的路径规则，包括隐藏规则，复用未变内容。项目有 `.aitasks/` 时，用本包的[只读查询脚本](scripts/query_aitasks.py)取摘要：`python3 -B "<skill-dir>/scripts/query_aitasks.py" --project-root "<project-root>" context --query "模块 符号 错误码"`。`<skill-dir>` 取当前 Skill 的实际安装目录。按返回 ID 用 `get-record --kind lesson --id …`（todo 用 `--kind todo`）读必要正文。任务开始、范围变化或新根因确认时查询，同会话复用未变结果，新会话重新查询。证据不足可扩大预算，关键事实仍核对当前环境。
+
+   **无 Python 3.10+ 的降级。** 命令找不到或版本不够时，按以下两步查询，整个任务最多取三条命中标题。标题查询须先静默检查 Markdown 围栏，只有检查返回 1 才继续。发现围栏或读取失败时跳过该文件的标题和状态，标为未验证。关键词留在标题锚定式内。
+
+   ```bash
+   if rg --no-config -q -- '^[[:blank:]]*(`{3,}|~{3,})' .aitasks/lessons.md; then
+     printf '%s\n' '记录文件含围栏，标题和状态未验证。' >&2
+   elif [ "$?" -eq 1 ]; then
+     rg --no-config -ni -m 3 -- '^##[[:blank:]]+.*(关键词一|关键词二)' .aitasks/lessons.md
+   fi
+   ```
+
+   第一步有标题命中时，才逐条提取状态。将两个 `6` 换为标题行号减一，仅输出紧邻同类注释里的 `status`。
+
+   ```bash
+   sed -nE -e '6s/^[ ]{0,3}<!-- aitasks:lesson( [^[:space:]<>]+)* status=(active|retired|superseded)( [^[:space:]<>]+)* -->[[:space:]]*$/status=\2/p' -e '6q' .aitasks/lessons.md
+   ```
+
+   查 todo 时使用 `.aitasks/todo.md`、`aitasks:todo` 和状态 `active|completed|cancelled`。缺少对应状态或归属不明时标为未验证。两步结束即停止读记录文件。禁止宽泛关键词搜索、上下文行、区间读取或编写临时解析器。经验正文及适用性保留未验证，依据当前代码与契约取证。若无法隔离标题和状态输出，记为未验证，跳过经验查询。
 2. 初次实现且上下文不足时，先看相关工具配置、相邻实现和共享设施；模式冲突或依据不足才补同类样本。依据依次为明确要求和契约、路径规则、项目工具、同类实现、仓库惯例、通用做法；仅关键业务行为、公开契约或偏好未定时询问。
 3. 能由代码、日志、测试或规则确认的问题先自行调查。剩余关键问题可一次合并少量互不依赖的问题；答案会决定后续问题时才逐项询问。
 4. 未明确的结构、调用或依赖关系可用已接入的 CodeGraph MCP 定位；已知文件和局部关系直接检索，重要结论以代码与测试核实。普通经验查询不加载维护流程或附带不需要的计数，缺失计数为“未记录”。
@@ -54,12 +72,12 @@ metadata:
 | 2 | 明确代码审查，或需要核实收到的审查反馈 | `code-review` |
 | 3 | 远程 CI 或构建流水线失败归因 | `ci-triage` |
 | 4 | 本地 Bug、测试/构建失败、性能或集成异常，且根因未明 | `systematic-debugging` |
-| 5 | 目标、范围、验收标准或关键业务决策存在会改变执行结果的歧义 | `requirements-framing` |
+| 5 | 现有证据无法确定目标、范围、验收标准或关键业务决策，且会改变执行结果 | `requirements-framing` |
 | 6 | 用户已要求实施现有方案、Spec 或任务清单 | `plan-execution` |
 | 7 | 尚未实施，且共享行为、跨模块数据流或契约影响仍未明确 | `change-impact-analysis` |
 | 8 | 界面的视觉、布局或交互需要设计、评估或有目的地改善 | `frontend-ui-ux` |
 | 9 | 新功能或 Bug 需要测试先行的变更闭环 | `test-driven-change` |
-| 10 | 明确要求验证，或高风险交付、发布前仍有证据缺口 | `verification-gate` |
+| 10 | 任务本身是独立验证或验收，或当前专项完成后仍缺影响交付结论的关键证据 | `verification-gate` |
 
 由入口选择一个当前阶段，只有尚存关键缺口才追加必要阶段；不因规则提到 Skill 名称而递归加载，也不重启已完成阶段。专项返回结论、证据和缺口。首次选择或路由实质变化时一句话说明原因，简单任务不输出路由表。根因未明才调试，共享影响未明才追加影响分析，需要回归保护才补测试策略，交付证据不足才追加验证关卡。
 

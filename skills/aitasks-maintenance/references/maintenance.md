@@ -1,6 +1,6 @@
 # `.aitasks` 维护参考
 
-批量查询、元数据更新、归档、失败恢复或核对幂等机制时按需读取本文件；普通只读经验查询不需要读取。高频记录约定见本 Skill 的 `SKILL.md`。优先调用 `scripts/maintain_aitasks.py`，只把必要的短输出带入上下文；没有 Python 时才回退到 Agent 直接读写 Markdown。
+批量查询、元数据更新、归档、失败恢复或核对幂等机制时按需读取本文件；普通只读经验查询不需要读取。高频记录约定见本 Skill 的 `SKILL.md`。优先调用 `scripts/maintain_aitasks.py`，只把必要的短输出带入上下文。无可用 Python 3.10+ 时按 Skill 正文的手工规则执行。
 
 ## 首次创建与忽略规则
 
@@ -52,9 +52,9 @@ python3 -B "$AITASKS_TOOL" --project-root "$AITASKS_PROJECT" finish-todo --id "$
 - `find-lessons`：`--query` 是单个字面子串，按标题或正文查找，包括无元数据旧记录。活动区无命中时回查归档，`--include-archive` 显式合并两区；排序依次考虑标题精确匹配、标题包含、正文匹配，同档固定经验优先，其他保持来源顺序。默认最多 10 条，`--limit` 须为正数；截断会提示总数。`--include-content` 输出正文，`--json` 同时给正文、元数据和源位置，两者互斥。归档只表示移出常用区，适用性仍须核对。
 - `add-todo` / `add-lesson`：从唯一的 `assets/` 模板创建记录，生成 UUID4 与初始元数据，保留已有内容；模板损坏在写入前失败。经验可用 `--pinned` 固定。要求 `.aitasks/` 已存在且目录、目标文件均非软链接；不修改 `.gitignore`。同名标题拒绝新建，仍须先检索语义相近的记录。标题不可换行，正文不可含未闭合围栏或围栏外的记录元数据、一/二级标题；已有未闭合围栏会隐藏新增记录时拒绝写入。
 - `list-todos`：默认只列 3 条活动 todo 的 ID、标题与状态，`--query` 用空格分隔关键词筛选，`--limit` 调整数目；总输出默认最多 2000 字符，`--max-chars` 调整。`--status all` 包括完成/取消项，仍受限额；单条正文优先用 `get-record`，旧 `--include-content` 保留但有预算。`--json` 返回总数与截断状态，始终只读。
-- `finish-todo`：用 `--id` 或唯一 `--todo` 选择已有记录，必填 `--result`，可填 `--verify`，一次更新正文、状态和完成日期；`--status cancelled` 用于取消。结果或验证小节不存在时追加，不覆盖其他内容。默认在同一把锁内检查并应用到期维护，归档冲突在记录写入前拒绝。
+- `finish-todo`：用 `--id` 或唯一 `--todo` 选择已有记录，必填 `--result`，可填 `--verify`，一次更新正文、状态和完成日期；`--status cancelled` 用于取消。结果或验证小节不存在时追加。写入目标、验证和结果时，正文中的三级标题及其子标题会下移一级，已有的六级标题保持六级。围栏内的示例保留原样。按 ID 重试时会识别已归档的相同完成结果，要求变更归档结果会报错。默认在同一把锁内检查并应用到期维护，归档冲突在记录写入前拒绝。
 - `mark-used`：按唯一 `--lesson` 或 `--id` 更新实际采用且状态有效的经验；ID 支持查找归档，标题选择保留原有活动区范围。传入当前 todo 的 `--task-id` 后，每个任务只计一次，即使多任务交错调用也不重复；任务指纹与计数在同一记录中原子更新。查询、读取、未采用的候选不计，失效经验拒绝计数。归档更新与同日维护追加一起预检，避免覆盖；次数不代表正确性。
-- `set-todo-status`：只修改 `status` 与 `completed_at`；`active` 会将 `completed_at` 重置为 `-`。
+- `set-todo-status`：只修改 `status` 与 `completed_at`。与 `finish-todo` 一样，重复设置同一完成状态会保留首次进入该状态的日期，重新激活时重置为 `-`。
 - `cleanup`：默认 dry-run；`--apply` 按保留期和容量规则把符合条件的记录移入 `.aitasks/archive/`，成功写入后才从活动文件删除。
 
 经验查询 JSON 保留 `matches` 及各项的正文、元数据、计数与 `source` 绝对路径/行号，增加 `total_matches`、`truncated`、`searched_archive`。`use_count_status` 区分 `recorded`、`missing`、`invalid`，缺失或无效为 `null`。无匹配返回空数组，不写文件或计数。

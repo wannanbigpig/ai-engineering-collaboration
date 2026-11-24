@@ -215,6 +215,64 @@ class MaintainAitasksTest(unittest.TestCase):
         archive = next((self.aitasks / "archive").glob("todo-*.md"))
         self.assertIn(old.strip(), archive.read_text())
 
+    def test_completion_replay_preserves_dates_and_section_boundaries(self) -> None:
+        created = self.run_script("add-todo", "--title", "Task", "--goal", "A task",
+                                  "--verify", "planned", "--json")
+        identity = json.loads(created.stdout)["id"]
+        todo = self.aitasks / "todo.md"
+        with todo.open("a") as handle:
+            handle.write("\n### 手工笔记\nKeep this note.\n")
+        body = "Fixed\n\n### Changes\nDetails.\n\n```markdown\n### Literal example\n```"
+        args = ("finish-todo", "--id", identity, "--result", body, "--json")
+        self.assertEqual(self.run_script(*args).returncode, 0)
+        before = todo.read_bytes()
+        replay = self.run_script("--today", "2026-09-16", *args)
+        self.assertEqual(replay.returncode, 0, replay.stderr)
+        self.assertFalse(json.loads(replay.stdout)["changed"])
+        self.assertEqual(todo.read_bytes(), before)
+        legacy = self.run_script("--today", "2026-09-16", "set-todo-status", "--todo", "Task",
+                                 "--status", "completed", "--json")
+        self.assertFalse(json.loads(legacy.stdout)["changed"])
+        self.assertIn("```markdown\n### Literal example\n```", todo.read_text())
+        self.assertEqual(self.run_script("finish-todo", "--id", identity, "--result", "Final").returncode, 0)
+        text = todo.read_text()
+        self.assertNotIn("Changes", text)
+        self.assertNotIn("Details.", text)
+        self.assertIn("### 手工笔记\nKeep this note.", text)
+
+    def test_replay_preserves_existing_todo_with_legacy_subheadings(self) -> None:
+        path = self.aitasks / "todo.md"
+        body = "Fixed\n\n### Changes\nDetails"
+        original = ("<!-- aitasks:todo id=legacy status=completed completed_at=2026-09-14 -->\n"
+                    "## Old task\n\n### 结果\n\n" + body + "\n\n### 备注\nKeep notes.\n")
+        path.write_text(original)
+        replay = self.run_script("finish-todo", "--id", "legacy", "--result", body, "--json")
+        self.assertEqual(replay.returncode, 0, replay.stderr)
+        self.assertEqual(path.read_text(), original)
+
+    def test_finish_by_id_recognizes_archived_retry_without_changing_history(self) -> None:
+        created = self.run_script("add-todo", "--title", "Archived task", "--goal", "Work",
+                                  "--verify", "planned", "--json")
+        identity = json.loads(created.stdout)["id"]
+        args = ("finish-todo", "--id", identity, "--result", "Done", "--json", "--todo-count-trigger", "1")
+        self.assertEqual(self.run_script(*args).returncode, 0)
+        archive = next((self.aitasks / "archive").glob("todo-*.md"))
+        archive_body = archive.read_bytes()
+        replay = self.run_script("--today", "2026-09-16", *args)
+        self.assertEqual(replay.returncode, 0, replay.stderr)
+        self.assertFalse(json.loads(replay.stdout)["changed"])
+        self.assertNotEqual(self.run_script("finish-todo", "--id", identity, "--result", "Different").returncode, 0)
+        self.assertEqual(archive.read_bytes(), archive_body)
+
+    def test_find_lessons_ignores_metadata_when_deciding_archive_fallback(self) -> None:
+        self.lessons.write_text(MARKER + "## Export totals\nCalculate totals.")
+        archive = self.aitasks / "archive" / "lessons-2026-09-01.md"
+        archive.parent.mkdir()
+        archive.write_text(MARKER + "## False positive\nA real match.")
+        result = json.loads(self.find("false", "--json"))
+        self.assertTrue(result["searched_archive"])
+        self.assertEqual([m["title"] for m in result["matches"]], ["False positive"])
+
     def test_finish_todo_preflight_failure_preserves_result_and_state(self) -> None:
         path = self.aitasks / "todo.md"
         original = ("<!-- aitasks:todo id=duplicate created_at=2026-09-15 status=active completed_at=- -->\n"

@@ -1,5 +1,6 @@
 import importlib.util
 import copy
+import hashlib
 from contextlib import redirect_stdout
 import io
 import json
@@ -16,6 +17,16 @@ from unittest.mock import patch
 SPEC = importlib.util.spec_from_file_location('behavior_eval', Path(__file__).resolve().parents[1] / 'evals/behavior_eval.py')
 eval_tool = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(eval_tool)
+
+
+def run_trusted_fixture(workspace, script):
+    """Execute only the repository-owned fixtures used by the decorated unit tests."""
+    return subprocess.run([sys.executable, '-E', '-B', '-S', '-c', script],
+                          cwd=workspace, capture_output=True, text=True, timeout=15)
+
+
+def trusted_fixture_transport(test):
+    return patch.object(eval_tool.probe_sandbox, 'run', new=run_trusted_fixture)(test)
 
 
 class BehaviorEvaluationTests(unittest.TestCase):
@@ -68,10 +79,18 @@ class BehaviorEvaluationTests(unittest.TestCase):
             last = workspace/'.aitasks'
             first.mkdir()
             last.mkdir(parents=True)
-            (first/'.observations.json').write_text(json.dumps({'observations': {'cause': {'tasks': ['t1'], 'lesson_id': None}}}))
-            (last/'.observations.json').write_text(json.dumps({'observations': {'cause': {'tasks': ['t1', 't2'], 'lesson_id': 'lesson1'}}}))
-            (first/'lessons.md').write_text('# Lessons\n')
-            (last/'lessons.md').write_text('<!-- aitasks:lesson id=lesson1 -->\n## Keep offset\n')
+            key = 'export.offset'
+            signature = hashlib.sha256(key.encode()).hexdigest()[:32]
+            first_row = {'key': key, 'tasks': ['t1'], 'lesson_id': None, 'evidence': 'export.py:2'}
+            final_row = {**first_row, 'tasks': ['t1', 't2'], 'lesson_id': 'lesson1'}
+            def write_state(folder, row, signature_key=signature):
+                (folder/'.observations.json').write_text(json.dumps(
+                    {'version': 1, 'observations': {signature_key: row}}))
+            write_state(first, first_row)
+            write_state(last, final_row)
+            example = '# Lessons\n```md\n<!-- aitasks:lesson id=example -->\n```\n'
+            (first/'lessons.md').write_text(example)
+            (last/'lessons.md').write_text(example + '<!-- aitasks:lesson id=lesson1 -->\n## Keep offset\n')
             todo = lambda identity: f'<!-- aitasks:todo id={identity} status=completed -->\n## {identity}\nDone.\n'
             (first/'todo.md').write_text(todo('t1'))
             (last/'todo.md').write_text(todo('t1') + todo('t2'))
@@ -79,7 +98,17 @@ class BehaviorEvaluationTests(unittest.TestCase):
                                          (('one', 'one'), 'fail'), (('one', 'two'), 'pass')):
                 with self.subTest(identities=identities):
                     traces = [{'thread_id': identity} for identity in identities]
-                    self.assertEqual(eval_tool.repeat_memory_check(workspace, first, traces)['status'], expected)
+                    result = eval_tool.repeat_memory_check(workspace, first, traces)
+                    self.assertEqual(result['status'], expected)
+                    self.assertEqual(result.get('required_evidence_unverified', False), expected == 'unverified')
+            traces = [{'thread_id': 'one'}, {'thread_id': 'two'}]
+            write_state(first, first_row, 'wrong-signature')
+            write_state(last, final_row, 'wrong-signature')
+            self.assertEqual(eval_tool.repeat_memory_check(workspace, first, traces)['status'], 'fail')
+            write_state(first, first_row)
+            write_state(last, final_row)
+            (last/'todo.md').write_text(todo('replacement') + todo('t2'))
+            self.assertEqual(eval_tool.repeat_memory_check(workspace, first, traces)['status'], 'fail')
 
     def test_no_skill_control_has_no_local_package_or_pinned_rules(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -114,6 +143,16 @@ class BehaviorEvaluationTests(unittest.TestCase):
                 with self.subTest(suite=suite), self.assertRaises(ValueError):
                     eval_tool.run_case(SimpleNamespace(suite=suite, output=root), None, 'no-skill', scenario, 1)
             self.assertEqual(list(root.iterdir()), [])
+
+    def test_run_requires_a_suite_before_creating_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            command = [sys.executable, '-B', str(SPEC.origin), 'run', '--baseline', str(root),
+                       '--output', str(root/'results'), '--codex', 'unused']
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn('required: --suite', result.stderr)
+            self.assertFalse((root/'results').exists())
 
     def test_cli_schedules_three_controls_and_preserves_source_identity(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -217,6 +256,7 @@ class BehaviorEvaluationTests(unittest.TestCase):
             (instance/'result.json').write_text(json.dumps(machine))
             self.assertEqual(eval_tool.report(output)['runs'][0]['review']['status'], 'fail')
 
+    @trusted_fixture_transport
     def test_repeat_fixture_adds_raw_second_task_and_preserves_first_repair(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -229,6 +269,7 @@ class BehaviorEvaluationTests(unittest.TestCase):
             (root/'export.py').write_text(repaired + '\ndef json_value(value):\n    return value.isoformat()\n')
             self.assertEqual(eval_tool.functional_check('R03', root)['status'], 'pass')
 
+    @trusted_fixture_transport
     def test_repeat_uses_fresh_cli_sessions_without_resume(self):
         with tempfile.TemporaryDirectory() as directory:
             args = SimpleNamespace(suite='memory-v2', output=Path(directory), codex='codex',
@@ -277,6 +318,7 @@ class BehaviorEvaluationTests(unittest.TestCase):
             command = eval_tool.command_for(args, root, root / 'last.txt', 'R01')
             self.assertIn('skills.config=[{path=' + json.dumps(str(skill)) + ',enabled=false}]', command)
 
+    @trusted_fixture_transport
     def test_memory_suite_separates_task_contract_from_retrieval(self):
         for scenario in ('R01', 'R02'):
             files = eval_tool.fixture(scenario, 'memory-v1')
@@ -402,6 +444,7 @@ class BehaviorEvaluationTests(unittest.TestCase):
             trace = [{'command': f'cat {expected}', 'aggregated_output': '# full skill\ncontent', 'exit_code': 0}]
             self.assertFalse(eval_tool.local_skill_read_proven(trace, root, 'code-review', '# full skill\ncontent'))
 
+    @trusted_fixture_transport
     def test_independent_probe_catches_weakening_visible_test(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -477,6 +520,7 @@ class FollowupEvaluationTests(unittest.TestCase):
             (root / '.aitasks/lessons.md').write_text('# 经验\n' + lesson + lesson)
             self.assertEqual(eval_tool.maintenance_check('M02', root, before, before)['status'], 'fail')
 
+    @trusted_fixture_transport
     def test_maintenance_probe_checks_complete_archive_content(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -546,19 +590,45 @@ class FollowupEvaluationTests(unittest.TestCase):
         self.assertEqual(result['dimensions']['process_efficiency']['status'], 'pending')
         self.assertEqual(result['acceptance'], 'unverified')
 
-    def test_command_evidence_preserves_each_output_and_exit(self):
+    def test_trace_summary_keeps_costs_and_links_to_portable_command_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory)/'raw.jsonl'
+            root = Path(directory)
+            workspace = root/'workspace'
+            workspace.mkdir()
+            args = SimpleNamespace(suite='natural-v2', output=root/'out', codex='unused',
+                                   external_skills=[], model=None, timeout=5)
             items = [dict(type='command_execution', id='c1', command='false; git status', aggregated_output='', exit_code=0),
                      dict(type='command_execution', id='c2', command='python3 check.py', aggregated_output='FAIL\n', exit_code=1)]
-            path.write_text('\n'.join(json.dumps({'type':'item.completed','item':i}) for i in items))
-            parsed=eval_tool.parse_trace(path)
-            evidence=eval_tool.command_evidence(parsed, Path(directory)/'commands')
+            usage = {'input_tokens': 10, 'output_tokens': 2}
+            events = [{'type': 'thread.started', 'thread_id': 'thread-1'},
+                      *[{'type': 'item.completed', 'item': item} for item in items],
+                      {'type': 'turn.completed', 'usage': usage}]
+            def completed(command, cwd, prompt, trace_path, stderr_path, timeout):
+                trace_path.write_text('\n'.join(json.dumps(event) for event in events) + '\npartial')
+                stderr_path.write_text('')
+                return {'exit_code': 0, 'seconds': 3, 'timed_out': False}
+            with patch.object(eval_tool, 'isolated_workspace', return_value=workspace), \
+                 patch.object(eval_tool, 'run_process', side_effect=completed):
+                eval_tool.run_case(args, None, 'no-skill', 'N02', 1)
+            moved = root/'moved-run'
+            (args.output/'N02-explain/no-skill-1').rename(moved)
+            result = json.loads((moved/'result.json').read_text())
+            summary, = result['trace_summary']
+            self.assertEqual(summary, {'thread_id': 'thread-1', 'completed_turns': 1, 'unparsed_lines': 1,
+                                       'usage': [usage], 'trace_file': 'trace-1.jsonl',
+                                       'command_index': 'commands-1/index.json'})
+            raw_trace = eval_tool.parse_trace(moved/summary['trace_file'])
+            old_result = {**result, 'trace_summary': [raw_trace]}
+            self.assertEqual(eval_tool.cost_metrics(result), eval_tool.cost_metrics(old_result))
+            self.assertEqual(eval_tool.cost_metrics(result)['output_tokens'], 2)
+            index = moved/summary['command_index']
+            evidence = json.loads(index.read_text())
             self.assertEqual(len(evidence), 2)
-            self.assertEqual(evidence[0]['raw_line'], 1)
+            self.assertEqual(evidence[0]['raw_line'], 2)
             self.assertIn('empty_output', evidence[0]['review_flags'])
             self.assertEqual(evidence[1]['exit_code'], 1)
-            self.assertEqual(Path(evidence[1]['output_file']).read_text(), 'FAIL\n')
+            self.assertEqual((index.parent/evidence[1]['output_file']).read_text(), 'FAIL\n')
+            self.assertEqual(json.loads((index.parent/'lifecycle.json').read_text()), raw_trace['command_events'])
             self.assertFalse(evidence[0]['verification_pass_proven'])
 
     def test_natural_typo_probe_records_missing_file_as_failure(self):
@@ -635,6 +705,7 @@ class FollowupEvaluationTests(unittest.TestCase):
                 eval_tool.run_case(args, Path('/source'), 'baseline', '13', 1)
             self.assertEqual(json.loads((instance/'runner-error.json').read_text()), error)
 
+    @trusted_fixture_transport
     def test_missing_followup_thread_fails_execution_and_acceptance(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -710,6 +781,60 @@ class FollowupEvaluationTests(unittest.TestCase):
             self.assertEqual(result['readonly_boundary'], 'fail')
             self.assertEqual(result['acceptance'], 'fail')
 
+    def test_skill_contract_controls_keep_historical_fixtures_and_explicit_profiles(self):
+        suite = 'skill-contracts-v1'
+        self.assertEqual(list(eval_tool.SUITES[suite]), ['C01', 'C02', 'C03', 'C04', 'C05', 'F09'])
+        for scenario in ('C01', 'C02', 'C03', 'C04', 'F09'):
+            self.assertIsNone(eval_tool.SUITES[suite][scenario][1])
+        self.assertIn('unittest', eval_tool.fixture('S05', 'selection-v1')['PLAN.md'])
+        self.assertNotIn('unittest', eval_tool.fixture('C02', suite)['PLAN.md'])
+        self.assertIn('分隔符', eval_tool.fixture('C03', suite)['PLAN.md'])
+        self.assertTrue(eval_tool.is_readonly('C03'))
+        self.assertFalse(eval_tool.is_readonly('C02'))
+        inventory = {'code-review/SKILL.md': {}, 'aitasks-maintenance/SKILL.md': {}}
+        self.assertEqual(eval_tool.installed_profile(inventory, suite, 'C05'), {'code-review/SKILL.md': {}})
+        self.assertTrue(eval_tool.is_readonly('C05'))
+        self.assertIn('有界文本回退', eval_tool.SUITES['maintenance-v2']['M08'][3][0])
+        self.assertTrue(eval_tool.supports_no_skill(suite, ['C01', 'C02']))
+        self.assertFalse(eval_tool.supports_no_skill(suite, ['C05']))
+
+    def test_readonly_business_fixture_detects_recorded_refund_attempts(self):
+        trace = {'commands': [], 'errors': [], 'completed_turns': 1}
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            for name, content in eval_tool.fixture('F09', 'skill-contracts-v1').items():
+                (workspace / name).write_text(content, encoding='utf-8')
+            before = eval_tool.snapshot(workspace)
+            self.assertEqual(eval_tool.functional_check('F09', workspace)['status'], 'pass')
+            result = subprocess.run([sys.executable, '-B', '-c', '''
+from pathlib import Path
+from threading import Thread
+from urllib.request import urlopen
+from app import Handler, LoopbackHTTPServer
+
+with LoopbackHTTPServer(('127.0.0.1', 0), Handler) as server:
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f'http://127.0.0.1:{server.server_port}'
+    log = Path('refund-attempts.log')
+    try:
+        urlopen(url, timeout=2).close()
+        urlopen(url + '/action', data=b'action=filter&amount=12', timeout=2).close()
+        assert log.read_text() == ''
+        urlopen(url + '/action', data=b'action=submit&amount=12', timeout=2).close()
+        urlopen(url + '/action', data=b'action=retry&amount=12', timeout=2).close()
+        assert log.read_text() == 'submit\\nretry\\n'
+    finally:
+        server.shutdown()
+        thread.join()
+'''], cwd=workspace, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(eval_tool.functional_check('F09', workspace)['status'], 'fail')
+            result = eval_tool.score('F09', before, eval_tool.snapshot(workspace), [trace],
+                                     [{'exit_code': 0}], '', None, suite='skill-contracts-v1')
+            self.assertEqual(result['readonly_boundary'], 'fail')
+            self.assertEqual(result['acceptance'], 'fail')
+
     def test_frontend_suite_runs_old_baseline_without_new_skill(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -738,6 +863,7 @@ class FollowupEvaluationTests(unittest.TestCase):
             self.assertFalse((workspace/'.agents/skills/frontend-ui-ux').exists())
             self.assertFalse((workspace/'predeclared.json').exists())
 
+    @trusted_fixture_transport
     def test_experience_suite_fixtures_and_bounded_contract_probes(self):
         self.assertEqual(list(eval_tool.SUITES['experience-v1']), ['X01', 'X02', 'X03'])
         self.assertIn('plan-execution', eval_tool.fixture_rules('plan-execution', 'experience-v1'))
@@ -777,6 +903,7 @@ class FollowupEvaluationTests(unittest.TestCase):
                     cli.write_text(cli.read_text().replace('"CONNECT_FAILED"', '"OTHER_ERROR"'))
                     self.assertEqual(eval_tool.functional_check(scenario, root)['status'], 'fail')
 
+    @trusted_fixture_transport
     def test_ui_probe_resolves_button_form_ownership_and_overrides(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -839,6 +966,7 @@ class FollowupEvaluationTests(unittest.TestCase):
                     else:
                         self.assertEqual(result['status'], 'fail', result)
 
+    @trusted_fixture_transport
     def test_ui_probe_checks_amount_input_owner_and_usability(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -854,6 +982,18 @@ class FollowupEvaluationTests(unittest.TestCase):
             filter_html = '<button name="action" value="filter">处理</button>'
             cases = {
                 'nested amount': (named, True),
+                'hidden type': (named.replace('type="number"', 'type="hidden"'), False),
+                'readonly amount': (named.replace(input_html, input_html.replace(' required>', ' readonly>')), False),
+                'input inside hidden container': (named.replace(input_html, '<div hidden>' + input_html + '</div>'), False),
+                'implicit label': (named.replace('<label for="amount">金额</label>', '<label>金额')
+                                    .replace(input_html, input_html + '</label>'), True),
+                'aria-labelledby': (named.replace('<label for="amount">金额</label>', '<span id="caption">金额</span>')
+                                    .replace(input_html, input_html.replace(' required>', ' aria-labelledby="caption">')), True),
+                'empty label': (named.replace('<label for="amount">金额</label>', '<label for="amount"></label>'), False),
+                'label targets another control': (named.replace('<label for="amount">金额</label>', '<label for="other">金额')
+                                                  .replace(input_html, input_html + '</label>'), False),
+                'label belongs to first descendant': (named.replace('<label for="amount">金额</label>',
+                    '<label>其他<input name="other">').replace(input_html, input_html + '</label>'), False),
                 'external amount with forward form reference': (named.replace(input_html, '').replace(
                     named_form, input_html.replace(' name="amount"', ' form="amount-form" name="amount"')
                     + named_form), True),
@@ -896,6 +1036,7 @@ class FollowupEvaluationTests(unittest.TestCase):
                     else:
                         self.assertEqual(result['status'], 'fail', result)
 
+    @trusted_fixture_transport
     def test_ui_probe_accepts_roles_emitted_only_in_response(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -943,6 +1084,7 @@ finally:
 '''], cwd=root, capture_output=True, text=True, timeout=5)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    @trusted_fixture_transport
     def test_experience_runner_keeps_scoring_outside_fixture(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -998,6 +1140,25 @@ class BatchEvaluationTests(unittest.TestCase):
             return_value={'path': '/test/codex', 'sha256': 'cli-v1'})
         self.cli.start()
         self.addCleanup(self.cli.stop)
+
+    def test_runtime_identity_tracks_effective_global_rules_but_ignores_user_config(self):
+        config = self.root/'config.toml'
+        rules = self.root/'AGENTS.md'
+        override = self.root/'AGENTS.override.md'
+        with patch.dict(os.environ, {'CODEX_HOME': str(self.root)}):
+            config.write_text('# old\n')
+            rules.write_text('Base rules\n')
+            original = eval_tool.runtime_identity()
+            config.write_text('# edited while --ignore-user-config is active\n')
+            self.assertEqual(eval_tool.runtime_identity(), original)
+            rules.write_text('Changed rules\n')
+            self.assertNotEqual(eval_tool.runtime_identity(), original)
+            override.write_text('Override rules\n')
+            overridden = eval_tool.runtime_identity()
+            rules.write_text('Shadowed rules\n')
+            self.assertEqual(eval_tool.runtime_identity(), overridden)
+            override.write_text('')
+            self.assertNotEqual(eval_tool.runtime_identity(), overridden)
 
     def test_batch_freezes_full_sources_and_rejects_changed_conditions(self):
         first = eval_tool.prepare_batch(self.args)
@@ -1128,7 +1289,10 @@ class BatchEvaluationTests(unittest.TestCase):
         return instance
 
     def test_cost_provenance_requires_archived_execution_boundaries_not_current_runtime(self):
-        batch = eval_tool.prepare_batch(self.args)
+        historic_runtime = eval_tool.runtime_identity()
+        historic_runtime['config_files']['/old-home/config.toml'] = 'archived-config-digest'
+        with patch.object(eval_tool, 'runtime_identity', return_value=historic_runtime):
+            batch = eval_tool.prepare_batch(self.args)
         for variant in ('baseline', 'candidate'):
             self.result(batch, 'S01', variant)
         with patch.object(eval_tool, 'runtime_identity', side_effect=AssertionError('must not inspect current runtime')):

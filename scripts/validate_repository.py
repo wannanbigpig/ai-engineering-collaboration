@@ -12,13 +12,20 @@ import string
 import sys
 from urllib.parse import unquote, urlsplit
 
-from bootstrap_project import BootstrapError, file_manifest
 from sync_query_tools import check_query_tools
 
 
 ROOT = Path(__file__).resolve().parents[1]
+RELEASE_SKILLS = {
+    "ai-engineering-collaboration", "aitasks-maintenance", "change-impact-analysis",
+    "ci-triage", "code-review", "frontend-ui-ux", "plan-execution",
+    "requirements-framing", "systematic-debugging", "test-driven-change", "verification-gate",
+}
 LINK_LABEL = r"(?<!\\)\[((?:\\.|[^\]\\\n])*)\]"
 LINK_TITLE = r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\))'''
+# Match the file and directory exclusions applied by skills@1.9.0.
+EXCLUDED_FILES = {"metadata.json"}
+EXCLUDED_DIRECTORIES = {".git", "__pycache__", "__pypackages__"}
 
 
 def link_destination(text: str, start: int = 0) -> tuple[str, int] | None:
@@ -93,7 +100,60 @@ def markdown_link_targets(text: str) -> list[str]:
                               for target in targets))
 
 
-def check_packages(root: Path) -> list[str]:
+def skill_version(body: str) -> str | None:
+    """Read the direct metadata.version scalar in the repository's block-style frontmatter."""
+    lines = body.splitlines()
+    if not lines or lines[0] != "---" or "---" not in lines[1:]:
+        return None
+    in_metadata = metadata_seen = version_seen = False
+    field_indent = None
+    version = None
+    for line in lines[1:lines.index("---", 1)]:
+        field = line.lstrip(" ")
+        if not field or field.startswith("#"):
+            continue
+        indent = len(line) - len(field)
+        if indent == 0:
+            metadata = re.match(r"""(['"]?)metadata\1[ \t]*:(?=[ \t]|$)""", field)
+            if metadata:
+                if metadata_seen:
+                    raise ValueError("duplicate frontmatter metadata key")
+                metadata_seen = True
+            in_metadata = bool(metadata and re.fullmatch(r"[ \t]*(?:#.*)?", field[metadata.end():]))
+            field_indent = None
+        elif in_metadata:
+            if field_indent is None:
+                field_indent = indent
+            key = re.match(r"""(['"]?)version\1[ \t]*:(?=[ \t]|$)""", field)
+            if indent == field_indent and key:
+                if version_seen:
+                    raise ValueError("duplicate frontmatter metadata.version key")
+                version_seen = True
+                value = re.fullmatch(r"""[ \t]+(['"]?)([^\s'"#]+)\1(?:[ \t]+#.*)?[ \t]*""", field[key.end():])
+                if value:
+                    version = value[2]
+    return version
+
+
+def skill_files(skill: Path) -> set[Path]:
+    def inspection_failed(error: OSError) -> None:
+        raise error
+
+    if skill.is_symlink():
+        raise ValueError(f"Symlinked skill content is unsupported: {skill}")
+    files = set()
+    for base, directories, filenames in os.walk(skill, followlinks=False, onerror=inspection_failed):
+        directories[:] = sorted(set(directories) - EXCLUDED_DIRECTORIES - EXCLUDED_FILES)
+        for name in sorted(set(directories + filenames) - EXCLUDED_FILES):
+            path = Path(base) / name
+            if path.is_symlink():
+                raise ValueError(f"Symlinked skill content is unsupported: {path}")
+            if path.is_file():
+                files.add(path.relative_to(skill))
+    return files
+
+
+def inspect_skills(root: Path, *, expected_names: set[str] | None = None) -> tuple[list[Path], list[str]]:
     errors = check_query_tools(root)
     try:
         version = (root / "VERSION").read_text(encoding="utf-8").strip()
@@ -105,45 +165,49 @@ def check_packages(root: Path) -> list[str]:
     skills = sorted(path for path in (root / "skills").glob("*") if path.is_dir())
     if not skills:
         errors.append("No Skill packages found")
+    if expected_names is not None:
+        actual_names = {skill.name for skill in skills}
+        for name in sorted(expected_names - actual_names):
+            errors.append(f"Missing release Skill: {name}")
+        for name in sorted(actual_names - expected_names):
+            errors.append(f"Unexpected release Skill: {name}")
     for skill in skills:
-        entry = skill / "SKILL.md"
-        if not entry.is_file():
-            errors.append(f"{entry}: missing SKILL.md")
-            continue
-        body = entry.read_text(encoding="utf-8")
-        match = re.search(r"^  version: (.+)$", body, re.MULTILINE)
-        if not match or match.group(1) != version:
-            errors.append(f"{entry}: metadata.version differs from VERSION ({version})")
         try:
-            manifest = file_manifest(skill)
-        except BootstrapError as error:
+            files = skill_files(skill)
+        except (OSError, ValueError) as error:
             errors.append(str(error))
             continue
-        # Validate each package in isolation: a resource in a sibling Skill is
-        # unavailable to users who install this Skill alone. Inspect only the
-        # distributed Markdown, using the installer's resource inventory.
-        for document in (skill / name for name in manifest if name.endswith(".md")):
-            for target in markdown_link_targets(document.read_text(encoding="utf-8")):
+        entry = skill / "SKILL.md"
+        if Path("SKILL.md") not in files:
+            errors.append(f"{entry}: missing SKILL.md")
+            continue
+        skill_root = skill.resolve()
+        for relative in sorted(path for path in files if path.suffix == ".md"):
+            document = skill / relative
+            markdown = document.read_text(encoding="utf-8")
+            if document == entry:
+                try:
+                    if skill_version(markdown) != version:
+                        errors.append(f"{entry}: metadata.version differs from VERSION ({version})")
+                except ValueError as error:
+                    errors.append(f"{entry}: {error}")
+            for target in markdown_link_targets(markdown):
                 parsed = urlsplit(target)
                 if parsed.scheme or parsed.netloc or not parsed.path:
                     continue
                 resource = (document.parent / unquote(parsed.path)).resolve()
-                if not resource.is_relative_to(skill.resolve()):
+                if not resource.is_relative_to(skill_root):
                     errors.append(f"{document}: resource outside standalone package: {target}")
                 elif not resource.exists():
                     errors.append(f"{document}: missing resource: {target}")
                 else:
-                    relative = resource.relative_to(skill.resolve())
+                    relative_resource = resource.relative_to(skill_root)
                     if resource.is_dir():
-                        # The file-only release archive creates a directory only
-                        # when it contains at least one distributed descendant.
-                        prefix = relative.as_posix().rstrip("/") + "/" if relative.parts else ""
-                        if not any(name.startswith(prefix) for name in manifest):
-                            errors.append(f"{document}: directory has no distributed files: {target} "
-                                          "(release archives omit empty directories)")
-                    elif relative.as_posix() not in manifest:
+                        if not any(relative_resource in path.parents for path in files):
+                            errors.append(f"{document}: directory has no distributed files: {target}")
+                    elif relative_resource not in files:
                         errors.append(f"{document}: resource is excluded from distribution: {target}")
-    return errors
+    return skills, errors
 
 
 def run_check(command: list[str], root: Path) -> int:
@@ -164,9 +228,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     root = args.root.resolve()
     try:
-        errors = check_packages(root)
-    except (OSError, UnicodeError, ValueError) as error:
-        errors = [f"Cannot validate package content: {error}"]
+        skills, errors = inspect_skills(root, expected_names=RELEASE_SKILLS)
+    except (OSError, ValueError) as error:
+        print(f"Cannot validate package content: {error}", file=sys.stderr)
+        return 1
     if errors:
         for error in errors:
             print(error, file=sys.stderr)
@@ -177,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Agent Skills schema validation: NOT RUN (--offline)", flush=True)
     else:
         commands.extend(["uvx", "--from", "skills-ref==0.1.1", "agentskills", "validate", str(skill)]
-                        for skill in sorted((root / "skills").iterdir()) if skill.is_dir())
+                        for skill in skills)
     commands.append(["git", "diff", "--check"])
     commands.append(["git", "diff", "--cached", "--check"])
     if args.tests:

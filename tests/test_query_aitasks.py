@@ -128,6 +128,18 @@ class StandaloneQueryTest(unittest.TestCase):
         self.assertNotEqual(self.run_query("add-todo", "--title", "Unexpected").returncode, 0)
         self.assertEqual(self.snapshot(), before)
 
+    def test_long_todo_details_keep_matching_ids_and_fit_serialized_budget(self):
+        path = self.records / "todo.md"
+        path.write_text("<!-- aitasks:todo id=task status=active -->\n## Title\n" + '"λ\n' * 900)
+        args = ("list-todos", "--include-content", "--limit", "1", "--max-chars", "512")
+        raw = self.run_query(*args, "--json")
+        data = json.loads(raw.stdout)
+        self.assertTrue(data["truncated"])
+        self.assertLessEqual(len(raw.stdout), 512)
+        self.assertEqual([row["id"] for row in data["todos"]], ["task"])
+        self.assertIn("## Title", data["todos"][0]["content"])
+        self.assertIn("## Title", self.run_query(*args).stdout)
+
     def test_missing_records_query_creates_no_directory_or_cache(self):
         self.records.rmdir()
         before = self.snapshot()

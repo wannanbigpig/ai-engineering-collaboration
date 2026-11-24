@@ -111,11 +111,19 @@ class ObservationEvaluationTests(unittest.TestCase):
             rows[FIRST_KEY].update(tasks=['task-a', 'task-b'], lesson_id='lesson-one')
             (workspace/'.aitasks/.observations.json').write_text(json.dumps({'version': 1, 'observations': rows}))
             (workspace/'.aitasks/lessons.md').write_text('<!-- aitasks:lesson id=lesson-one -->\n## 保留日期偏移\n- 原因：导出移除时区。\n')
-            args = (workspace, first, [{'thread_id': 'first'}, {'thread_id': 'second'}], before, after_first, snapshot(workspace))
+            snapshots = (before, after_first, snapshot(workspace))
+            args = (workspace, first, [{'thread_id': 'first'}, {'thread_id': 'second'}], *snapshots)
             self.assertEqual(observation.check_flow('M06', *args)['status'], 'pass')
-            rows[FIRST_KEY]['tasks'] = ['task-a', 'task-a']
-            (workspace/'.aitasks/.observations.json').write_text(json.dumps({'version': 1, 'observations': rows}))
-            self.assertEqual(observation.check_flow('M06', *args)['status'], 'fail')
+            without_identity = observation.check_flow('M06', workspace, first, [{}, {}], *snapshots)
+            self.assertEqual(without_identity['status'], 'unverified')
+            self.assertTrue(without_identity['required_evidence_unverified'])
+            for tasks, lesson in ((['task-a', 'task-a'], 'lesson-one'),
+                                  (['replaced', 'task-b'], 'lesson-one'),
+                                  (['task-a', 'task-b'], 'another-lesson')):
+                with self.subTest(tasks=tasks, lesson=lesson):
+                    rows[FIRST_KEY].update(tasks=tasks, lesson_id=lesson)
+                    (workspace/'.aitasks/.observations.json').write_text(json.dumps({'version': 1, 'observations': rows}))
+                    self.assertEqual(observation.check_flow('M06', *args)['status'], 'fail')
 
     def test_different_causes_require_two_single_observations_without_lesson(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -29,14 +29,22 @@ jobs:
       - name: Install explicit Python
         run: uv python install 3.12
 
-      - name: Validate packages and run unit tests
+      - name: Set up Node.js at the installation minimum
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.20.0"
+
+      - name: Pull the contract probe image
+        run: docker pull "$(python3 evals/probe_sandbox.py --image)"
+
+      - name: Validate Skills and run tests
+        env:
+          REQUIRE_PROBE_CONTAINER: "1"
+          REQUIRE_NPX_INSTALL: "1"
         run: uv run --no-project --python 3.12 python -B scripts/validate_repository.py --tests
 
-      - name: Build standalone packages
-        run: uv run --no-project --python 3.12 python -B scripts/package_skills.py --output "$RUNNER_TEMP/skill-packages"
-
   compatibility:
-    name: ${{ matrix.os }} / Python ${{ matrix.python }} / ${{ matrix.suite }}
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -44,14 +52,9 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            python: '3.9'
-            suite: test_bootstrap_project.py
-          - os: ubuntu-latest
             python: '3.10'
-            suite: 'test_*.py'
           - os: macos-latest
             python: '3.12'
-            suite: 'test_*.py'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
@@ -61,4 +64,5 @@ jobs:
       - name: Check runtime compatibility
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-        run: uv run --no-project --python "${{ matrix.python }}" python -B -m unittest discover -s tests -p "${{ matrix.suite }}"
+          REQUIRE_PROBE_CONTAINER: "0"
+        run: uv run --no-project --python "${{ matrix.python }}" python -B -m unittest discover -s tests

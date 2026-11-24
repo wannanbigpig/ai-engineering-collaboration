@@ -4,14 +4,32 @@ description: "分析尚未明确的共享行为、跨模块数据流或契约影
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.15
+  version: 1.7.16
 ---
 
 # 变更影响分析
 
 修改前追踪受影响路径、数据流和风险，先分析后实施。
 
-项目有 `.aitasks/` 时，先从当前可发现的 Skill 中定位可选的 `aitasks-maintenance`，存在才读取其目录内的 `references/query.md`，不加载维护流程或假定相邻安装。未安装或不支持只读查询时，用本 Skill 自带的[只读查询脚本](scripts/query_aitasks.py)：`python3 -B "<skill-dir>/scripts/query_aitasks.py" --project-root "<project-root>" context --query "模块 符号 错误码"`，按返回 ID 用 `get-record --kind lesson --id …`（todo 用 `--kind todo`）取必要正文，由脚本处理状态与围栏边界。Python 不可用时只取少量标题及所属元数据定位线索，无法核实的正文与适用性标为未验证，依据当前代码取证，不临时编写经验解析器。经验只作线索，结论仍核对当前调用链与契约。
+项目有 `.aitasks/` 时，用本包的[只读查询脚本](scripts/query_aitasks.py)取摘要：`python3 -B "<skill-dir>/scripts/query_aitasks.py" --project-root "<project-root>" context --query "模块 符号 错误码"`。`<skill-dir>` 取当前 Skill 的实际安装目录。按返回 ID 用 `get-record --kind lesson --id …`（todo 用 `--kind todo`）读必要正文。结论核对当前调用链与契约。
+
+**无 Python 3.10+ 的降级。** 命令找不到或版本不够时，按以下两步查询，整个任务最多取三条命中标题。标题查询须先静默检查 Markdown 围栏，只有检查返回 1 才继续。发现围栏或读取失败时跳过该文件的标题和状态，标为未验证。关键词留在标题锚定式内。
+
+```bash
+if rg --no-config -q -- '^[[:blank:]]*(`{3,}|~{3,})' .aitasks/lessons.md; then
+  printf '%s\n' '记录文件含围栏，标题和状态未验证。' >&2
+elif [ "$?" -eq 1 ]; then
+  rg --no-config -ni -m 3 -- '^##[[:blank:]]+.*(关键词一|关键词二)' .aitasks/lessons.md
+fi
+```
+
+第一步有标题命中时，才逐条提取状态。将两个 `6` 换为标题行号减一，仅输出紧邻同类注释里的 `status`。
+
+```bash
+sed -nE -e '6s/^[ ]{0,3}<!-- aitasks:lesson( [^[:space:]<>]+)* status=(active|retired|superseded)( [^[:space:]<>]+)* -->[[:space:]]*$/status=\2/p' -e '6q' .aitasks/lessons.md
+```
+
+查 todo 时使用 `.aitasks/todo.md`、`aitasks:todo` 和状态 `active|completed|cancelled`。缺少对应状态或归属不明时标为未验证。两步结束即停止读记录文件。禁止宽泛关键词搜索、上下文行、区间读取或编写临时解析器。经验正文及适用性保留未验证，依据当前代码与契约取证。若无法隔离标题和状态输出，记为未验证，跳过经验查询。
 
 ## 追踪清单
 

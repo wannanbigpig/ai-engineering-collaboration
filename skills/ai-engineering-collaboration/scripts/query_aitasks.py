@@ -269,9 +269,11 @@ def searchable_lesson_records(record_file: RecordFile) -> list[Record]:
     for start, end in gaps:
         section_start: int | None = None
         section_level = 0
-        for heading_start, level in headings:
-            if not start <= heading_start < end:
-                continue
+        if start == end:
+            continue
+        left = bisect.bisect_left(headings, (start,))
+        right = bisect.bisect_left(headings, (end,), lo=left)
+        for heading_start, level in headings[left:right]:
             if section_start is not None and level > section_level:
                 continue
             if section_start is not None:
@@ -370,26 +372,37 @@ def bounded_json(payload: dict, max_chars: int) -> str:
         raise SystemExit("--max-chars must be at least 512")
     max_chars -= 1  # print() adds one trailing newline to the tool response.
     encode = lambda: json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    content_rows = [row for row in [payload, *payload.get("todos", [])] if "content" in row]
+    if sum(len(row["content"]) for row in content_rows) <= max_chars:
+        text = encode()
+        if len(text) <= max_chars:
+            return text
+
+    payload["truncated"] = True
+    # Reserve the result identities before allocating space for optional bodies.
+    bodies = {id(row): row["content"] for row in content_rows}
+    for row in content_rows:
+        row["content"] = ""
     text = encode()
     while len(text) > max_chars:
         collections = [payload[key] for key in ("lessons", "todos", "observations") if payload.get(key)]
         if not collections:
             break
         max(collections, key=lambda rows: len(json.dumps(rows[-1], ensure_ascii=False))).pop()
-        payload["truncated"] = True
         text = encode()
-    if len(text) > max_chars and "content" in payload:
-        content = payload["content"]
-        payload["truncated"] = True
-        low, high = 0, len(content)
-        while low < high:
+    if bodies and len(text) <= max_chars:
+        rows = [row for row in [payload, *payload.get("todos", [])] if id(row) in bodies]
+        low, high = 0, max_chars
+        while low < high and rows:
             middle = (low + high + 1) // 2
-            payload["content"] = content[:middle]
+            for row in rows:
+                row["content"] = bodies[id(row)][:middle]
             if len(encode()) <= max_chars:
                 low = middle
             else:
                 high = middle - 1
-        payload["content"] = content[:low]
+        for row in rows:
+            row["content"] = bodies[id(row)][:low]
         text = encode()
     if len(text) > max_chars:
         raise SystemExit("--max-chars is too small for this record's identity; increase the budget")
@@ -464,12 +477,6 @@ def command_list_todos(args: argparse.Namespace) -> int:
     payload = {"todos": [{"id": r.stable_id, "title": r.title[:80], "status": r.fields.get("status"),
                           **({"content": r.raw} if args.include_content else {})} for r in records[:args.limit]],
                "total_matches": len(records), "truncated": len(records) > args.limit}
-    if args.include_content:
-        # Bound each explicit body before bounding the collection envelope.
-        for row in payload["todos"]:
-            if len(row["content"]) > args.max_chars // args.limit:
-                row["content"] = row["content"][:args.max_chars // args.limit]
-                payload["truncated"] = True
     serialized = bounded_json(payload, args.max_chars)
     if args.json_output:
         print(serialized)

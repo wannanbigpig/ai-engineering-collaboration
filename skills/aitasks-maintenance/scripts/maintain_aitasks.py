@@ -25,7 +25,7 @@ from query_aitasks import (
     FIELD_PATTERN, FENCE_PATTERN, HEADING_PATTERN, MARKER_PATTERN,
     Record, RecordFile, add_query_commands, bounded_json, lesson_json, lesson_status,
     load_record_file, parse_fields, project_files, query_concepts, read_markdown,
-    record_markers, searchable_lesson_records, unfenced_matches,
+    record_content, record_markers, searchable_lesson_records, unfenced_matches,
 )
 
 
@@ -344,31 +344,6 @@ def prepare_archive_content(
     if not addition.endswith("\n"):
         addition += "\n"
     return existing_text.rstrip("\r\n") + "\n\n" + addition
-
-
-def append_archive(
-    path: Path,
-    kind: str,
-    source_path: Path,
-    records: list[Record],
-    today: date,
-) -> bool:
-    """Append records to an archive file, skipping identical records already there.
-
-    Returns True when the file was written, False when nothing was appended.
-    """
-    if not records:
-        return False
-    existing = (
-        read_markdown(path)
-        if path.exists()
-        else f"# Archived {kind} records\n\n"
-    )
-    content = prepare_archive_content(existing, kind, source_path, records, today)
-    if content is None:
-        return False
-    atomic_write(path, content)
-    return True
 
 
 def prepare_cleanup_writes(
@@ -881,19 +856,16 @@ def command_find_lessons(args: argparse.Namespace) -> int:
     lesson_path, _, _, archive_dir = project_files(args.project_root)
     lesson_file = load_record_file(lesson_path, "lesson")
     query = args.query.casefold()
-    matches = [
-        (lesson_file, record)
-        for record in searchable_lesson_records(lesson_file)
-        if (args.include_inactive or lesson_status(record) == "active")
-        and (query in record.title.casefold() or query in record.raw.casefold())
-    ]
+    def matching_records(source):
+        return [(source, record) for record in searchable_lesson_records(source)
+                if (args.include_inactive or lesson_status(record) == "active")
+                and query in record_content(record).casefold()]
+
+    matches = matching_records(lesson_file)
     searched_archive = not matches or args.include_archive
     if searched_archive:
         for path in sorted(archive_dir.glob("lessons-*.md")):
-            archived = load_record_file(path, "lesson")
-            matches.extend((archived, record) for record in searchable_lesson_records(archived)
-                           if (args.include_inactive or lesson_status(record) == "active")
-                           and (query in record.title.casefold() or query in record.raw.casefold()))
+            matches.extend(matching_records(load_record_file(path, "lesson")))
     matches.sort(key=lambda item: (
         0 if item[1].title.casefold() == query else 1 if query in item[1].title.casefold() else 2,
         item[1].fields.get("pinned", "false").lower() != "true",
@@ -1033,13 +1005,29 @@ def render_record_template(template: str, kind: str, replacements: dict[str, str
     return rendered if rendered.endswith("\n") else rendered + "\n"
 
 
+def nest_todo_headings(value: str) -> str:
+    """Nest supplied Markdown headings under the template's level-three sections."""
+    headings = unfenced_matches(value, HEADING_PATTERN)
+    if any(heading.group(0).startswith(("### ", "###\t")) for heading in headings):
+        chunks = []
+        cursor = 0
+        for heading in headings:
+            chunks.append(value[cursor:heading.start()])
+            if not heading.group(0).startswith("######"):
+                chunks.append("#")
+            cursor = heading.start()
+        chunks.append(value[cursor:])
+        return "".join(chunks)
+    return value
+
+
 def command_add_record(args: argparse.Namespace) -> int:
     """Append one structured record while holding the same lock as maintenance."""
     kind = args.kind
     title = validate_new_record_field(args.title, "title", title=True)
     if kind == "todo":
-        goal = validate_new_record_field(args.goal, "goal")
-        verify = validate_new_record_field(args.verify, "verify")
+        goal = nest_todo_headings(validate_new_record_field(args.goal, "goal"))
+        verify = nest_todo_headings(validate_new_record_field(args.verify, "verify"))
     else:
         context = validate_new_record_field(args.context, "context")
         problem = validate_new_record_field(args.problem, "problem")
@@ -1153,6 +1141,14 @@ def command_add_record(args: argparse.Namespace) -> int:
     return 0
 
 
+def set_todo_status(record: Record, status: str, today: date) -> None:
+    if status == "active":
+        record.fields["completed_at"] = "-"
+    elif record.fields.get("status") != status or parse_date(record.fields.get("completed_at")) is None:
+        record.fields["completed_at"] = today.isoformat()
+    record.fields["status"] = status
+
+
 def command_set_todo_status(args: argparse.Namespace) -> int:
     """Set one uniquely titled todo record's lifecycle metadata."""
     todo_path = project_files(args.project_root)[1]
@@ -1164,12 +1160,7 @@ def command_set_todo_status(args: argparse.Namespace) -> int:
         if len(matches) > 1:
             raise SystemExit(f"todo title is not unique: {args.todo}")
         record = matches[0]
-        record.fields["status"] = args.status
-        record.fields["completed_at"] = (
-            resolve_today(args.today).isoformat()
-            if args.status in COMPLETED_TODO_STATUSES
-            else "-"
-        )
+        set_todo_status(record, args.status, resolve_today(args.today))
         changed = write_record_change(args, todo_path, render_record_file(todo_file))
     print_record_result(args, record.stable_id, "todo", args.status, "updated" if changed else "unchanged", changed,
         f"Updated todo: {record.title} "
@@ -1312,35 +1303,58 @@ def command_set_lesson_status(args: argparse.Namespace) -> int:
 def update_todo_section(record: Record, title: str, value: str) -> None:
     newline = "\r\n" if "\r\n" in record.raw else "\n"
     value = value.replace("\r\n", "\n").replace("\n", newline)
+    nested = nest_todo_headings(value)
     headings = unfenced_matches(record.raw, HEADING_PATTERN)
     for index, heading in enumerate(headings):
         if heading.group(0).startswith("### ") and heading.group("title") == title:
             end = next((other.start() for other in headings[index + 1:]
                         if len(other.group(0)) - len(other.group(0).lstrip("#")) <= 3), len(record.raw))
-            if record.raw[heading.end():end].strip("\r\n") == value:
+            if nested != value:
+                # Older releases stored same-level headings verbatim. Recognize a
+                # complete replay without consuming an adjacent hand-written section.
+                rest = record.raw[heading.end():].lstrip("\r\n")
+                if rest.startswith(value):
+                    tail = rest[len(value):]
+                    if not tail.strip("\r\n") or re.match(r"^(?:\r?\n)+###[ \t]", tail):
+                        return
+            if record.raw[heading.end():end].strip("\r\n") == nested:
                 return
-            record.raw = (record.raw[:heading.end()] + newline * 2 + value + newline * 2
+            record.raw = (record.raw[:heading.end()] + newline * 2 + nested + newline * 2
                           + record.raw[end:])
             return
-    record.raw = record.raw.rstrip("\r\n") + newline * 2 + f"### {title}" + newline * 2 + value + newline
+    record.raw = record.raw.rstrip("\r\n") + newline * 2 + f"### {title}" + newline * 2 + nested + newline
 
 
 def command_finish_todo(args: argparse.Namespace) -> int:
     result = validate_new_record_field(args.result, "result")
     verify = validate_new_record_field(args.verify, "verify") if args.verify is not None else None
-    todo_path = project_files(args.project_root)[1]
+    _, todo_path, _, archive_dir = project_files(args.project_root)
     with create_lock(args.project_root):
         todo_file = load_record_file(todo_path, "todo")
         matches = [r for r in todo_file.records
                    if (r.stable_id == args.id if args.id else r.title == args.todo)]
+        archived_source = None
+        if args.id and not matches:
+            for path in sorted(archive_dir.glob("todo-*.md")):
+                archive = read_markdown(path)
+                body = archive_record_contents(archive).get(args.id)
+                if body:
+                    matches.extend(load_record_file(path, "todo", body).records)
+                    archived_source = (path, archive)
         if len(matches) != 1:
             raise SystemExit("todo selector must match exactly one metadata record")
         record = matches[0]
-        record.fields.update(status=args.status, completed_at=resolve_today(args.today).isoformat())
+        original = record.raw
+        set_todo_status(record, args.status, resolve_today(args.today))
         update_todo_section(record, "结果", result)
         if verify is not None:
             update_todo_section(record, "验证", verify)
-        changed = write_record_change(args, todo_path, render_record_file(todo_file))
+        if archived_source is not None:
+            if record.render() != original:
+                raise SystemExit("archived todo differs from the requested completion; history preserved")
+            changed = write_record_change(args, *archived_source)
+        else:
+            changed = write_record_change(args, todo_file.path, render_record_file(todo_file))
     print_record_result(args, record.stable_id, "todo", args.status, "updated" if changed else "unchanged", changed,
                         f"Finished todo: {record.title} (id={record.stable_id}, status={args.status})")
     return 0
@@ -1387,11 +1401,6 @@ def command_cleanup(args: argparse.Namespace) -> int:
         except (ArchiveConflictError, OSError, UnicodeError) as error:
             print(f"ERROR: cleanup aborted before writing: {error}", file=sys.stderr)
             return 1
-        if not writes:
-            print(
-                "No changes applied because every eligible record is already archived."
-            )
-            return 0
         try:
             commit_writes(writes)
         except CommitError as error:

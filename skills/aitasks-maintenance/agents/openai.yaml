@@ -1,4 +1,4 @@
 interface:
   display_name: ".aitasks 维护"
-  short_description: "代码编辑自动记 todo；重复问题记经验；记录过量自动归档"
-  default_prompt: "使用 $aitasks-maintenance 自动记录当前代码编辑任务的 todo，沉淀重复问题，并按阈值归档。"
+  short_description: "按任务授权维护 todo、经验与归档，只读查询保持零写入"
+  default_prompt: "使用 $aitasks-maintenance 按当前授权维护记录。只读查询保持零写入。代码编辑一任务一条 todo。显式要求立即记经验，自动沉淀须有两次独立任务确认同因。"

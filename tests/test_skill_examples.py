@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import os
 import json
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from textwrap import dedent
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +36,38 @@ class SkillCommandExampleTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIsInstance(json.loads(result.stdout), dict)
             self.assertEqual(before, {str(p.relative_to(project)):p.read_bytes() for p in project.rglob('*') if p.is_file()})
+
+    def test_no_python_examples_skip_fenced_record_files(self):
+        shell = shutil.which('sh')
+        if not shell or not shutil.which('rg'):
+            self.skipTest('No sh or rg for the no-Python command example')
+        sources = [SKILL / 'references/query.md', *(ROOT / 'skills' / name / 'SKILL.md' for name in (
+            'ai-engineering-collaboration', 'change-impact-analysis', 'code-review', 'systematic-debugging'))]
+        examples = []
+        for source in sources:
+            match = re.search(r'^ {0,3}```bash\n( *if rg .*?)^ {0,3}```$',
+                              source.read_text(encoding='utf-8'), re.MULTILINE | re.DOTALL)
+            self.assertIsNotNone(match, source)
+            examples.append(dedent(match[1]))
+        self.assertEqual(len(set(examples)), 1)
+        command = examples[0].replace('关键词一|关键词二', 'retry')
+        with tempfile.TemporaryDirectory() as directory:
+            records = Path(directory) / '.aitasks'
+            records.mkdir()
+            lessons = records / 'lessons.md'
+            plain = '<!-- aitasks:lesson id=real status=active -->\n## retry title\n\nBody.\n'
+            lessons.write_text(plain, encoding='utf-8')
+            visible = subprocess.run([shell, '-c', command], cwd=directory, capture_output=True, text=True, check=True)
+            self.assertEqual(visible.stdout.splitlines(), ['2:## retry title'])
+            for fence in ('```', '~~~'):
+                with self.subTest(fence=fence):
+                    content = (plain + f'\n{fence}md\n<!-- aitasks:lesson id=example status=active -->\n'
+                               f'## retry example in body\n{fence}\n')
+                    lessons.write_text(content, encoding='utf-8')
+                    skipped = subprocess.run([shell, '-c', command], cwd=directory, capture_output=True, text=True, check=True)
+                    self.assertEqual(skipped.stdout, '')
+                    self.assertIn('未验证', skipped.stderr)
+                    self.assertEqual(lessons.read_text(encoding='utf-8'), content)
 
     def test_documented_read_only_commands_work_with_space_containing_paths(self) -> None:
         text = (SKILL / "references/maintenance.md").read_text(encoding="utf-8")

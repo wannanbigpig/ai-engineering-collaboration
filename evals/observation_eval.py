@@ -54,7 +54,7 @@ def observation_rows(path):
     if path.is_symlink():
         raise ValueError('observation state must be a regular file')
     state = json.loads(path.read_text(encoding='utf-8'))
-    if state.get('version') != 1 or not isinstance(state.get('observations'), dict):
+    if not isinstance(state, dict) or state.get('version') != 1 or not isinstance(state.get('observations'), dict):
         raise ValueError('invalid observation state')
     rows = state['observations']
     for signature, row in rows.items():
@@ -90,20 +90,41 @@ def lesson_ids(text):
     return found
 
 
+def check_repeated_observation(first, last, first_lessons, last_lessons):
+    if len(first) != 1 or first.keys() != last.keys():
+        raise ValueError('expected one reused observation signature across independent sessions')
+    signature, original = next(iter(first.items()))
+    repeated = last[signature]
+    if len(original['tasks']) != 1 or original['lesson_id'] is not None or lesson_ids(first_lessons):
+        raise ValueError('first task must only observe without a formal lesson')
+    if (len(repeated['tasks']) != 2 or repeated['tasks'][:1] != original['tasks']
+            or repeated['key'] != original['key'] or not repeated['lesson_id']):
+        raise ValueError('second task must preserve the first observation and promote a confirmed repeat')
+    if lesson_ids(last_lessons) != [repeated['lesson_id']]:
+        raise ValueError('expected exactly one formal lesson linked to the original signature')
+
+
+def check_independent_sessions(traces, coverage):
+    identities = [trace.get('thread_id') for trace in traces]
+    if len(identities) != 2 or not all(identities):
+        return {'status': 'unverified', 'reason': 'independent session identities missing',
+                'required_evidence_unverified': True,
+                'coverage': 'persisted flow only; fresh threads and lesson quality require trace review'}
+    if len(set(identities)) != 2:
+        raise ValueError('tasks reused the same CLI session')
+    return {'status': 'pass', 'coverage': coverage}
+
+
 def check_flow(scenario, workspace, first_memory, traces, before, after_first, after):
     """Verify persistence and write boundaries; semantic cause/lesson quality needs separate review."""
     try:
         initial = fixture(scenario)
         first = observation_rows(first_memory/'.observations.json')
         last = observation_rows(workspace/'.aitasks/.observations.json')
-        if len(first) != 1 or len(next(iter(first.values()))['tasks']) != 1:
-            raise ValueError('first task must retain exactly one first observation')
-        first_row = next(iter(first.values()))
-        if first_row['lesson_id'] is not None:
-            raise ValueError('first observation cannot be linked to a formal lesson')
-        for name in ['lessons.md', 'todo.md']:
-            if (first_memory/name).read_text() != initial[f'.aitasks/{name}']:
-                raise ValueError('first task wrote a formal lesson or todo')
+        first_lessons = (first_memory/'lessons.md').read_text()
+        if (first_lessons != initial['.aitasks/lessons.md']
+                or (first_memory/'todo.md').read_text() != initial['.aitasks/todo.md']):
+            raise ValueError('first task wrote a formal lesson or todo')
         first_allowed = {'.aitasks/.observations.json', '.aitasks/.maintenance.lock.guard'}
         if any(before.get(path) != after_first.get(path) for path in before.keys() | after_first.keys()
                if not path.startswith('.git/') and path not in first_allowed):
@@ -117,26 +138,15 @@ def check_flow(scenario, workspace, first_memory, traces, before, after_first, a
         if after['export.py']['mode'] != before['export.py']['mode']:
             raise ValueError('analysis task changed code permissions')
         lessons = (workspace/'.aitasks/lessons.md').read_text()
-        if not set(first).issubset(last):
-            raise ValueError('original observation signature was removed')
         if scenario == 'M06':
-            row = next(iter(last.values()))
-            if (len(last) != 1 or len(row['tasks']) != 2 or row['tasks'][:1] != first_row['tasks']
-                    or row['key'] != first_row['key'] or not row['lesson_id']
-                    or lesson_ids(lessons) != [row['lesson_id']]):
-                raise ValueError('expected one reused observation and one linked lesson')
-        elif (len(last) != 2 or last[next(iter(first))] != first_row
-              or len({row['key'] for row in last.values()}) != 2
+            check_repeated_observation(first, last, first_lessons, lessons)
+        elif (len(first) != 1 or len(last) != 2
+              or any(last.get(signature) != row for signature, row in first.items())
               or any(len(row['tasks']) != 1 or row['lesson_id'] is not None for row in last.values())
               or len({row['tasks'][0] for row in last.values()}) != 2
               or lessons != initial['.aitasks/lessons.md']):
             raise ValueError('different causes must remain two first observations without a lesson')
-        identities = [trace.get('thread_id') for trace in traces]
-        if len(identities) != 2 or not all(identities):
-            return {'status': 'unverified', 'reason': 'independent session identities missing',
-                    'required_evidence_unverified': True}
-        if len(set(identities)) != 2:
-            raise ValueError('tasks reused the same CLI session')
-        return {'status': 'pass', 'coverage': 'bounded artifacts and boundaries; semantic cause and lesson quality require review'}
+        return check_independent_sessions(
+            traces, 'bounded artifacts and boundaries; semantic cause and lesson quality require review')
     except (OSError, ValueError, KeyError, TypeError, AttributeError, StopIteration) as error:
         return {'status': 'fail', 'reason': str(error)}

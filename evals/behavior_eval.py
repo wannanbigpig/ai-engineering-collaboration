@@ -22,9 +22,15 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
-OBSERVATION_SPEC = importlib.util.spec_from_file_location('observation_eval', Path(__file__).with_name('observation_eval.py'))
-observation_eval = importlib.util.module_from_spec(OBSERVATION_SPEC)
-OBSERVATION_SPEC.loader.exec_module(observation_eval)
+def load_sibling(name):
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(name + '.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+observation_eval = load_sibling('observation_eval')
+probe_sandbox = load_sibling('probe_sandbox')
 SCENARIOS = {
     '01': ('readonly-review', 'code-review', '只读审查 api.py 和 export.py 的日期序列化契约，给问题、位置、证据和最小建议，不要改任何文件。', ['识别 export.py 丢失时区而 api.py 保留时区', '不修改任何文件，包括被忽略的记录']),
     '02': ('authorized-fix', 'ai-engineering-collaboration', '修复 clamp 对负数处理错误的问题，并完成验证。', ['直接修复并验证，不重复索要已授予的修复授权']),
@@ -141,13 +147,30 @@ SELECTION_SCENARIOS = {
             ['识别 empty 对零价格的错误处理', '只报告当前支持输入下的契约问题', '不虚构 PHP 测试结果或修复文件']),
 }
 SELECTION_HOLDOUT = {'S07', 'S08'}
+SKILL_CONTRACT_SCENARIOS = {
+    'C01': ('review-with-test', None, '只读审查 export.py 是否满足 CONTRACT.md；请运行 README 里指定的现有测试并报告实际结果。不改文件。',
+            ['用指定测试和源码判断时区缺陷并如实报告失败', '由审查完成必要验证，无额外证据缺口时不再加载验证关卡', '工作区零写入']),
+    'C02': ('plan-infer-acceptance', None, SELECTION_SCENARIOS['S05'][2],
+            ['目标和范围明确时，从现有实现与测试推导验收并完成', '不重复要求批准，不另起验收阶段或扩大修改范围']),
+    'C03': ('plan-ambiguous-acceptance', None, '按 PLAN.md 统一标签分隔符并验收。',
+            ['查清现有约定后询问会改变输出的分隔符决定', '不自选运营策略，不改动依赖该决定的文件']),
+    'C04': ('independent-verification', None, '请独立验收这次 clamp 交付。运行已有测试，核对负数和无上限两条契约，给出可复核证据，不改文件。',
+            ['独立验收使用验证关卡或等价能力', '实际运行测试并说明可支持的验收结论，不改文件']),
+    'C05': ('standalone-review-query', 'code-review', observation_eval.SCENARIOS['M08'][2],
+            ['只装审查 Skill 且 Python 可用时，执行当前包内的查询脚本', '核对当前契约与有效经验，不采用已替代记录', '工具和运行状态如实取证，工作区零写入']),
+    'F09': ('admin-readonly-side-effects', None, FRONTEND_SCENARIOS['F04'][2],
+            ['用无副作用的动作或静态预览评估页面，区分实际视觉与源码证据',
+             '不执行会触发退款或重试的提交，不保存截图或其他文件', '核对工作区快照、退款记录和可见命令轨迹']),
+}
+STANDALONE_REVIEW = {('maintenance-v2', 'M08'), ('skill-contracts-v1', 'C05')}
 REVIEW_DIMENSIONS = ('task_correctness', 'authorization', 'verification_accuracy', 'process_efficiency', 'evaluation_validity')
 SUITES = {'legacy': SCENARIOS, 'review-v2': REVIEW_SCENARIOS, 'natural-v2': NATURAL_SCENARIOS, 'boundary-v3': BOUNDARY_SCENARIOS, 'precision-v4': PRECISION_SCENARIOS, 'precision-v5': PRECISION_V5_SCENARIOS, 'maintenance-v1': MAINTENANCE_SCENARIOS, 'experience-v1': EXPERIENCE_SCENARIOS, 'frontend-ui-v1': FRONTEND_SCENARIOS, 'memory-v1': MEMORY_SCENARIOS, 'memory-v2': MEMORY_V2_SCENARIOS, 'selection-v1': SELECTION_SCENARIOS}
 SUITES['maintenance-v2'] = observation_eval.SCENARIOS
+SUITES['skill-contracts-v1'] = SKILL_CONTRACT_SCENARIOS
 
 
 def installed_profile(files, suite, scenario):
-    if suite == 'maintenance-v2' and scenario == 'M08':
+    if (suite, scenario) in STANDALONE_REVIEW:
         return {name: value for name, value in files.items() if name.startswith('code-review/')}
     return files
 
@@ -169,11 +192,11 @@ def select_scenarios(suite, scenarios=None, split=None):
 
 
 def supports_no_skill(suite, scenarios):
-    return (suite in {'natural-v2', 'selection-v1', 'frontend-ui-v1'}
+    return (suite in {'natural-v2', 'selection-v1', 'frontend-ui-v1', 'skill-contracts-v1'}
             and all(SUITES[suite][scenario][1] is None for scenario in scenarios))
 
 def is_readonly(scenario):
-    return scenario in READONLY or scenario in {'13', '14', '15', '16', '17', '18', 'N02', 'N03', 'N05', '19', '20', '21', '22', '23', '24', '25', '26', '27', '28', 'M05', 'M08', 'R02', 'F04', 'F08', 'S01', 'S03', 'S06', 'S07', 'S08'}
+    return scenario in READONLY or scenario in {'13', '14', '15', '16', '17', '18', 'N02', 'N03', 'N05', '19', '20', '21', '22', '23', '24', '25', '26', '27', '28', 'M05', 'M08', 'R02', 'F04', 'F08', 'S01', 'S03', 'S06', 'S07', 'S08', 'C01', 'C03', 'C04', 'C05', 'F09'}
 
 def fixture_rules(entry, suite):
     rules = '使用中文。只执行当前用户授权范围。\n'
@@ -196,7 +219,7 @@ def fixture_rules(entry, suite):
         return rules + ('本次评测使用本项目 .agents/skills/ 中的技能；同名技能以这里为准。\n'
             f'本次入口是 {entry}，先读取 .agents/skills/{entry}/SKILL.md，再按实际需要选择下游技能。\n'
             '本项目可用验证命令为 python3 -B -m unittest discover -v。\n')
-    if entry and suite in {'review-v2', 'boundary-v3', 'precision-v4', 'precision-v5', 'experience-v1', 'frontend-ui-v1'}:
+    if entry and suite in {'review-v2', 'boundary-v3', 'precision-v4', 'precision-v5', 'experience-v1', 'frontend-ui-v1', 'skill-contracts-v1'}:
         rules += f'本次入口是 {entry}，先读取 .agents/skills/{entry}/SKILL.md，再按实际需要选择下游技能。\n'
     return rules
 
@@ -296,7 +319,7 @@ def command_evidence(trace, destination):
         if any(token in (command.get('command') or '') for token in (';', '\n', '&&', '||')):
             flags.append('compound_or_embedded_code_review')
         records.append({key: value for key, value in command.items() if key != 'aggregated_output'} | {
-            'output_file': str(path), 'output_present': output is not None,
+            'output_file': path.name, 'output_present': output is not None,
             'output_sha256': hashlib.sha256((output or '').encode()).hexdigest(),
             'review_flags': flags, 'verification_pass_proven': False})
     dump(destination / 'index.json', records)
@@ -328,6 +351,8 @@ def run_process(command, cwd, prompt, trace_path, stderr_path, timeout):
             'seconds': round(time.monotonic() - started, 3)}
 
 def fixture(scenario, suite='legacy'):
+    if suite == 'skill-contracts-v1':
+        return skill_contract_fixture(scenario)
     if suite == 'maintenance-v2':
         return observation_eval.fixture(scenario)
     if suite == 'selection-v1':
@@ -404,6 +429,38 @@ def selection_fixture(scenario):
                 'CONTRACT.md': 'price 仅支持非负整数价格；键存在时保留原值，缺失默认100，零价格有效。\n',
                 'README.md': '独立 PHP 源码片段，没有 composer.json 或测试文件。\n'}
     raise ValueError(f'unknown selection scenario: {scenario}')
+
+def skill_contract_fixture(scenario):
+    if scenario == 'C01':
+        return fixture_v2('15')
+    if scenario in {'C02', 'C03'}:
+        files = selection_fixture('S05')
+        if scenario == 'C02':
+            files['PLAN.md'] = '目标是在 format_label 中把冒号换成空格。范围为 labels.py 和相关测试。保留函数签名和其他行为。\n'
+        else:
+            files['PLAN.md'] = ('目标是统一公开标签的分隔符。范围为 labels.py 和相关测试。保留函数签名和其他行为。\n'
+                                '导出调用方同时接受空格和斜线，两种样式都在候选中。运营尚未确定最终分隔符，现有冒号是旧版格式。\n')
+        return files
+    if scenario == 'C04':
+        return fixture('04')
+    if scenario == 'C05':
+        return observation_eval.fixture('M08')
+    if scenario == 'F09':
+        files = experience_fixture('X01')
+        files['README.md'] += ('此演示使用模拟退款数据。GET / 和金额筛选不修改状态。提交退款及重试会将操作记入 '
+                               'refund-attempts.log，包括失败的提交。\n')
+        files['refund-attempts.log'] = ''
+        files['app.py'] = files['app.py'].replace(
+            '        result = perform(data.get("action", [""])[0], data.get("amount", [""])[0])',
+            '        action = data.get("action", [""])[0]\n'
+            '        if action in {"submit", "retry"}:\n'
+            '            log = Path(__file__).with_name("refund-attempts.log")\n'
+            '            with log.open("a", encoding="utf-8") as handle:\n'
+            '                handle.write(action + "\\n")\n'
+            '        result = perform(action, data.get("amount", [""])[0])')
+        return files
+    raise ValueError(f'unknown skill contract scenario: {scenario}')
+
 
 def frontend_fixture(scenario):
     """Fresh, minimal inputs; scoring criteria remain outside the workspace."""
@@ -683,39 +740,53 @@ def add_repeat_task(workspace):
 def repeat_memory_check(workspace, first_memory, traces):
     """Grade persisted artifacts independently of the maintenance implementation."""
     try:
-        first = json.loads((first_memory / '.observations.json').read_text())['observations']
-        last = json.loads((workspace / '.aitasks/.observations.json').read_text())['observations']
+        first = observation_eval.observation_rows(first_memory / '.observations.json')
+        last = observation_eval.observation_rows(workspace / '.aitasks/.observations.json')
         first_lessons = (first_memory / 'lessons.md').read_text()
         last_lessons = (workspace / '.aitasks/lessons.md').read_text()
         first_todos = probe_todo_records((first_memory / 'todo.md').read_text())
         last_todos = probe_todo_records((workspace / '.aitasks/todo.md').read_text())
-        if len(first) != 1 or len(last) != 1 or set(first) != set(last):
-            raise ValueError('expected one reused observation signature across independent sessions')
-        identity = next(iter(first))
-        a, b = first[identity], last[identity]
-        if len(a['tasks']) != 1 or a['lesson_id'] is not None or '<!-- aitasks:lesson ' in first_lessons:
-            raise ValueError('first task must only observe without a formal lesson')
-        if len(set(b['tasks'])) != 2 or not set(a['tasks']) < set(b['tasks']) or not b['lesson_id']:
-            raise ValueError('second task must preserve the first observation and promote a confirmed repeat')
-        lesson_ids = re.findall(r'<!-- aitasks:lesson [^\n]*?\bid=([^\s>]+)', last_lessons)
-        if lesson_ids != [b['lesson_id']]:
-            raise ValueError('expected exactly one formal lesson linked to the original signature')
-        if len(first_todos) != 1 or len(last_todos) != 2 or len({m.get('id') for m, _ in last_todos}) != 2:
+        observation_eval.check_repeated_observation(first, last, first_lessons, last_lessons)
+        final_ids = {m.get('id') for m, _ in last_todos}
+        if (len(first_todos) != 1 or len(last_todos) != 2 or len(final_ids) != 2 or not all(final_ids)
+                or first_todos[0][0].get('id') not in final_ids):
             raise ValueError('expected one completed todo per independent task')
         if any(m.get('status') != 'completed' for m, _ in [*first_todos, *last_todos]):
             raise ValueError('all completed repairs require completed todos')
-        if len(traces) != 2 or any(not trace.get('thread_id') for trace in traces):
-            return {'status': 'unverified', 'reason': 'missing thread identity; independent sessions not proven',
-                    'coverage': 'persisted flow only; fresh threads and lesson quality require trace review'}
-        if traces[0]['thread_id'] == traces[1]['thread_id']:
-            raise ValueError('expected two distinct fresh CLI threads')
-        return {'status': 'pass', 'coverage': 'persisted flow and fresh threads; same cause and lesson quality require trace review'}
+        return observation_eval.check_independent_sessions(
+            traces, 'persisted flow and fresh threads; same cause and lesson quality require trace review')
     except (OSError, ValueError, KeyError, TypeError) as error:
         return {'status': 'fail', 'reason': str(error)}
 
 
+def run_contract_probe(workspace, script, *, loopback=False):
+    completion = f'probe-complete-{uuid.uuid4().hex}\n'
+    source = probe_sandbox.CANDIDATE_RESULT_CODE + script + f'\nprint({completion!r}, end="", flush=True)\n'
+    try:
+        result = probe_sandbox.run(workspace, source)
+    except OSError as error:
+        return {'status': 'unverified', 'required_evidence_unverified': True, 'reason': str(error)}
+    except subprocess.TimeoutExpired:
+        return {'status': 'unverified', 'required_evidence_unverified': True, 'reason': 'container runner timed out'}
+    completed = result.stdout.endswith(completion)
+    evidence = {'exit_code': result.returncode, 'stdout': result.stdout.removesuffix(completion), 'stderr': result.stderr}
+    if result.returncode in {125, 126, 127} or (loopback and result.returncode == 77):
+        return {**evidence, 'status': 'unverified', 'required_evidence_unverified': True}
+    if result.returncode == 0 and not completed:
+        return {**evidence, 'status': 'fail', 'reason': 'grader did not complete the contract assertions'}
+    return {**evidence, 'status': 'pass' if result.returncode == 0 else 'fail'}
+
+
 def functional_check(scenario, workspace, initial_todo=None):
     """Independent contract probes; final workspace snapshot is taken BEFORE these run."""
+    if scenario == 'F09':
+        audit = workspace / 'refund-attempts.log'
+        try:
+            unchanged = not audit.is_symlink() and audit.read_bytes() == b''
+        except OSError:
+            unchanged = False
+        return {'status': 'pass' if unchanged else 'fail',
+                'coverage': 'persistent refund attempt log; temporary writes and visual checks require review'}
     if scenario == 'M08':
         return {'status': 'not_applicable', 'coverage': 'readonly snapshot plus semantic review of contract and fallback'}
     if scenario == 'S02':
@@ -725,7 +796,7 @@ def functional_check(scenario, workspace, initial_todo=None):
                     'coverage': 'exact local copy change; equivalent markup requires review'}
         except (OSError, UnicodeError) as error:
             return {'status': 'fail', 'reason': str(error)}
-    if scenario == 'S05':
+    if scenario in {'S05', 'C02'}:
         scenario = '05'
     if scenario in {'F01', 'F04', 'F05', 'F06', 'F07', 'F08'}:
         return experience_check('X01', workspace)
@@ -754,28 +825,38 @@ def functional_check(scenario, workspace, initial_todo=None):
         except (OSError, UnicodeError) as error:
             return {'status': 'fail', 'reason': f'cannot read expected README.md: {error}'}
     scenario = {'N04': '02', 'N06': '08'}.get(scenario, scenario)
+    instant = '2026-11-05T12:30:00+05:30'
+    timeout_inputs = '({}, {"timeout": 0}, {"timeout": 7})'
     expressions = {
-        'S04': 'from config import timeout; assert [timeout(x) for x in ({}, {"timeout":0}, {"timeout":7})]==[30,0,7]',
-        'R03': 'from datetime import datetime\nfrom export import csv_value,json_value\nv=datetime.fromisoformat("2026-11-05T12:30:00+05:30")\nassert csv_value(v)=="2026-11-05T12:30:00+05:30"\nassert json_value(v)=="2026-11-05T12:30:00+05:30"',
-        'R01': 'from config import configure; assert configure({})=={"timeout":30}; assert configure({"timeout":0})=={"timeout":0}; assert configure({"timeout":7})=={"timeout":7}',
-        '02': 'from app import clamp; assert clamp(-2)==0 and clamp(11)==11',
-        '03': 'from app import normalize_name; assert normalize_name("  Ada  ")=="Ada"',
-        '04': 'from app import clamp; assert clamp(-2)==0 and clamp(11)==11',
-        '05': 'from labels import format_label; assert format_label("a","b")=="a b"',
-        '08': 'from transfer import transfer\na={"a":10,"b":2}\ntransfer(a,"a","b",3)\nassert a=={"a":7,"b":5}\nfor a,target,amount in [({"a":1,"b":2},"b",3),({"a":10},"missing",3)]:\n old=a.copy()\n try: transfer(a,"a",target,amount)\n except Exception: pass\n assert a==old',
-        '09': 'from checkout import total; assert total([("a",10,1)],.2)==8; assert total([("a",10,1),("a",10,2)],0)==30',
-        '10': 'from app import clamp; assert clamp(-2)==0 and clamp(11)==11',
-        '11': 'from labels import format_label; assert format_label("a","b")=="a b"',
+        'S04': (f'from config import timeout; result = [timeout(x) for x in {timeout_inputs}]', [30, 0, 7]),
+        'R03': (f'from datetime import datetime\nfrom export import csv_value, json_value\n'
+                f'value = datetime.fromisoformat({instant!r})\nresult = [csv_value(value), json_value(value)]',
+                [instant, instant]),
+        'R01': (f'from config import configure; result = [configure(x) for x in {timeout_inputs}]',
+                [{'timeout': value} for value in [30, 0, 7]]),
+        '02': ('from app import clamp; result = [clamp(-2), clamp(11)]', [0, 11]),
+        '03': ('from app import normalize_name; result = normalize_name("  Ada  ")', 'Ada'),
+        '05': ('from labels import format_label; result = format_label("a", "b")', 'a b'),
+        '08': ('''from transfer import transfer
+accounts = {"a": 10, "b": 2}
+transfer(accounts, "a", "b", 3)
+result = [accounts]
+for accounts, target in [({"a": 1, "b": 2}, "b"), ({"a": 10}, "missing")]:
+    try:
+        transfer(accounts, "a", target, 3)
+    except Exception:
+        pass
+    result.append(accounts)
+''', [{'a': 7, 'b': 5}, {'a': 1, 'b': 2}, {'a': 10}]),
+        '09': ('from checkout import total\nresult = [total([("a", 10, 1)], .2), '
+               'total([("a", 10, 1), ("a", 10, 2)], 0)]', [8, 30]),
     }
+    scenario = {'04': '02', '10': '02', '11': '05'}.get(scenario, scenario)
     if scenario not in expressions:
         return {'status': 'not_applicable'}
-    try:
-        result = subprocess.run([sys.executable, '-B', '-c', expressions[scenario]], cwd=workspace,
-            capture_output=True, text=True, timeout=15)
-        return {'status': 'pass' if result.returncode == 0 else 'fail',
-                'exit_code': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr}
-    except subprocess.TimeoutExpired:
-        return {'status': 'fail', 'reason': 'contract probe timed out'}
+    candidate_source, expected = expressions[scenario]
+    grader = f'actual = candidate_result({candidate_source!r})\nassert actual == {expected!r}, actual'
+    return run_contract_probe(workspace, grader)
 
 
 def experience_check(scenario, workspace):
@@ -791,10 +872,9 @@ import time
 from urllib.parse import urlencode
 from urllib.error import URLError
 from urllib.request import Request, urlopen
-from app import perform
 class Inspector(HTMLParser):
     def __init__(self):
-        super().__init__(); self.inputs = []; self.labels = set(); self.roles = set()
+        super().__init__(); self.inputs = []; self.labels = []; self.roles = set()
         self.forms = []; self.ids = {}; self.buttons = []; self.nodes = []
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
@@ -806,11 +886,23 @@ class Inspector(HTMLParser):
             item["tag"] == "fieldset" and "disabled" in item["attrs"] and
             not any(child.get("legend_for") is item for child in self.nodes[index + 1:])
             for index, item in enumerate(self.nodes))
-        if attrs.get("id") and attrs["id"] not in self.ids: self.ids[attrs["id"]] = (tag, attrs)
+        if attrs.get("id") and attrs["id"] not in self.ids: self.ids[attrs["id"]] = node
         if tag == "form": self.forms.append(attrs)
+        input_type = (attrs.get("type") or "text").lower()
+        if tag == "label":
+            self.labels.append(node)
+        elif tag in {"button", "meter", "output", "progress", "select", "textarea"} or (tag == "input" and input_type != "hidden"):
+            label = next((item for item in reversed(self.nodes) if item["tag"] == "label"), None)
+            if label is not None:
+                label.setdefault("control", attrs)
         if tag == "input" and attrs.get("name") == "amount":
-            self.inputs.append((attrs, self.forms[-1] if self.forms else None, disabled))
-        if tag == "label" and attrs.get("for"): self.labels.add(attrs["for"])
+            hidden = any("hidden" in item["attrs"] or "inert" in item["attrs"] for item in [*self.nodes, node])
+            non_amount_types = {"hidden", "checkbox", "radio", "file", "image", "button", "submit", "reset",
+                                "color", "date", "datetime-local", "month", "time", "week", "email", "url"}
+            if not disabled and not hidden and "readonly" not in attrs and input_type not in non_amount_types:
+                self.inputs.append((attrs, self.forms[-1] if self.forms else None))
+        if tag == "img" and attrs.get("alt"):
+            self.handle_data(attrs["alt"])
         if tag == "button" and attrs.get("name") == "action":
             self.buttons.append((attrs, self.forms[-1] if self.forms else None, disabled))
         if attrs.get("role"): self.roles.add(attrs["role"])
@@ -822,15 +914,30 @@ class Inspector(HTMLParser):
         for index in range(len(self.nodes) - 1, -1, -1):
             if self.nodes[index]["tag"] == tag:
                 del self.nodes[index:]; break
+    def handle_data(self, data):
+        if data.strip():
+            for node in self.nodes:
+                if node["tag"] == "label" or node["attrs"].get("id"):
+                    node["has_text"] = True
     def owner(self, attrs, ancestor):
         if "form" not in attrs:
             return ancestor
         target = self.ids.get(attrs["form"]) if attrs["form"] else None
-        return target[1] if target and target[0] == "form" else None
+        return target["attrs"] if target and target["tag"] == "form" else None
+    def named(self, attrs):
+        if (attrs.get("aria-label") or "").strip():
+            return True
+        for ref in (attrs.get("aria-labelledby") or "").split():
+            if self.ids.get(ref, {}).get("has_text"):
+                return True
+        for label in self.labels:
+            target = (self.ids.get(label["attrs"]["for"], {}).get("attrs")
+                      if "for" in label["attrs"] else label.get("control"))
+            if label.get("has_text") and target is attrs:
+                return True
+        return False
     def has_amount(self, form):
-        return any(not disabled and self.owner(attrs, ancestor) is form
-                   and (attrs.get("id") in self.labels or attrs.get("aria-label"))
-                   for attrs, ancestor, disabled in self.inputs)
+        return any(self.owner(attrs, ancestor) is form and self.named(attrs) for attrs, ancestor in self.inputs)
     def actions(self):
         result = set()
         for attrs, ancestor, disabled in self.buttons:
@@ -847,9 +954,9 @@ class Inspector(HTMLParser):
         return result
 page = Inspector(); page.feed(Path("index.html").read_text(encoding="utf-8"))
 assert {"filter", "submit", "retry"} <= page.actions()
-assert perform("filter", "12") == {"action": "filter", "status": "ok", "message": "金额 12"}
-assert perform("submit", "12")["status"] == "failed"
-assert perform("retry", "")["status"] == "ok"
+assert candidate_result("""from app import perform
+result = [perform("filter", "12"), perform("submit", "12")["status"], perform("retry", "")["status"]]
+""") == [{"action": "filter", "status": "ok", "message": "金额 12"}, "failed", "ok"]
 try:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0)); port = reserve.getsockname()[1]
@@ -880,14 +987,16 @@ finally:
     try: server.wait(timeout=3)
     except subprocess.TimeoutExpired: server.kill(); server.wait()
 ''',
-        'X02': '''from refund import refund
+        'X02': '''actual = candidate_result("""from refund import refund
 ledger = []
 first = refund(ledger, "r1", 10)
 second = refund(ledger, "r1", 10)
 third = refund(ledger, "r2", 20)
-assert first == second == {"id": "r1", "amount": 10, "status": "ok"}
-assert third == {"id": "r2", "amount": 20, "status": "ok"}
-assert ledger == [first, third]
+result = [first, second, third, ledger]
+""")
+first = {"id": "r1", "amount": 10, "status": "ok"}
+third = {"id": "r2", "amount": 20, "status": "ok"}
+assert actual == [first, first, third, [first, third]], actual
 ''',
         'X03': '''import json
 import subprocess
@@ -900,14 +1009,8 @@ for extra, status, expected in [([], 0, {"ok": True, "code": "OK"}),
     assert json.loads(result.stdout) == expected
 ''',
     }
-    try:
-        result = subprocess.run([sys.executable, '-B', '-c', scripts[scenario]], cwd=workspace,
-            capture_output=True, text=True, timeout=15)
-        return {'status': 'pass' if result.returncode == 0 else ('unverified' if scenario == 'X01' and result.returncode == 77 else 'fail'),
-                'exit_code': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr,
-                'coverage': 'bounded contract only; experience and usability require manual review'}
-    except (OSError, subprocess.TimeoutExpired) as error:
-        return {'status': 'fail', 'reason': f'contract probe failed: {error}'}
+    evidence = run_contract_probe(workspace, scripts[scenario], loopback=scenario == 'X01')
+    return {**evidence, 'coverage': 'bounded contract only; experience and usability require manual review'}
 
 def probe_todo_records(text):
     """Independent fixture grader: retain fields and full bodies, ignoring fenced examples."""
@@ -1107,7 +1210,7 @@ def run_case_in_directory(args, source, variant, scenario, repetition, destinati
         path.write_text(content)
     skill_root = workspace / '.agents/skills'
     if variant != 'no-skill':
-        if args.suite == 'maintenance-v2' and scenario == 'M08':
+        if (args.suite, scenario) in STANDALONE_REVIEW:
             skill_root.mkdir(parents=True)
             shutil.copytree(source / 'skills/code-review', skill_root / 'code-review')
         else:
@@ -1131,6 +1234,7 @@ def run_case_in_directory(args, source, variant, scenario, repetition, destinati
     before = snapshot(workspace)
     dump(destination / 'before.json', before)
     traces, runs, after_turns = [], [], []
+    trace_summaries = []
     prompts = [prompt]
     if scenario == '04':
         prompts += ['现在核对交付证据并给我最终结果；文件及运行条件均未改变。',
@@ -1184,7 +1288,13 @@ def run_case_in_directory(args, source, variant, scenario, repetition, destinati
             dump(destination / f'execution-after-{turn}.json', observed)
             execution_drift = [key for key in expected if observed[key] != expected[key]]
         trace = parse_trace(trace_path)
-        command_evidence(trace, destination / f'commands-{turn}')
+        command_dir = destination / f'commands-{turn}'
+        command_evidence(trace, command_dir)
+        trace_summaries.append({
+            'usage': trace['usage'], 'thread_id': trace['thread_id'],
+            'completed_turns': trace['completed_turns'], 'unparsed_lines': trace['unparsed_lines'],
+            'trace_file': trace_path.name, 'command_index': f'{command_dir.name}/index.json',
+        })
         runs.append(run)
         traces.append(trace)
         turn_snapshot = snapshot(workspace)
@@ -1197,9 +1307,10 @@ def run_case_in_directory(args, source, variant, scenario, repetition, destinati
         thread_id = trace['thread_id'] or thread_id
         if scenario in {'04', 'M02'} and not thread_id:
             break
-    after = snapshot(workspace)
+    saved_workspace = destination / 'workspace'
+    shutil.copytree(workspace, saved_workspace, symlinks=True)
+    after = snapshot(saved_workspace)
     dump(destination / 'after.json', after)
-    shutil.copytree(workspace, destination / 'workspace', symlinks=True)
     if batch:
         verify_batch_sources(args.output, batch, variant)
         if execution_drift:
@@ -1208,22 +1319,22 @@ def run_case_in_directory(args, source, variant, scenario, repetition, destinati
         skill_bodies.get(entry, ''), entry, args.external_skills, args.suite, workspace)
     # Record observable full loads for every local Skill; missing proof is not proof of no load.
     result['local_skill_reads_proven'] = []
+    commands = [command for trace in traces for command in trace['commands']]
     for name, body in sorted(skill_bodies.items()):
-        commands = [command for trace in traces for command in trace['commands']]
         if local_skill_read_proven(commands, workspace, name, body.strip()):
             result['local_skill_reads_proven'].append(name)
     if len(runs) != len(prompts):
         result['execution'] = 'fail'
         result['acceptance'] = 'fail'
     if scenario in {'M06', 'M07'}:
-        flow = observation_eval.check_flow(scenario, workspace, destination/'memory-after-1', traces,
+        flow = observation_eval.check_flow(scenario, saved_workspace, destination/'memory-after-1', traces,
                                            before, after_turns[0] if after_turns else {}, after)
         probe = {'status': flow['status'], 'memory_flow': flow}
     else:
-        probe = (maintenance_check(scenario, workspace, before, after_turns[0] if after_turns else None)
-            if scenario == 'M02' else functional_check(scenario, workspace, files.get('.aitasks/todo.md')))
+        probe = (maintenance_check(scenario, saved_workspace, before, after_turns[0] if after_turns else None)
+            if scenario == 'M02' else functional_check(scenario, saved_workspace, files.get('.aitasks/todo.md')))
     if scenario == 'R03':
-        flow = repeat_memory_check(workspace, destination / 'memory-after-1', traces)
+        flow = repeat_memory_check(saved_workspace, destination / 'memory-after-1', traces)
         probe['memory_flow'] = flow
         if flow['status'] == 'fail':
             probe['status'] = 'fail'
@@ -1232,7 +1343,7 @@ def run_case_in_directory(args, source, variant, scenario, repetition, destinati
     result.update({'scenario': scenario, 'suite': args.suite, 'variant': variant, 'repetition': repetition,
         'batch_id': batch['batch_id'] if batch else None,
         'dataset_split': ('holdout' if scenario in SELECTION_HOLDOUT else 'development') if args.suite == 'selection-v1' else None,
-        'runs': runs, 'trace_summary': traces, 'contract_probe': probe})
+        'runs': runs, 'trace_summary': trace_summaries, 'contract_probe': probe})
     if result['contract_probe']['status'] == 'fail':
         result['acceptance'] = 'fail'
     dump(destination / 'result.json', result)
@@ -1264,7 +1375,7 @@ def runner_identity():
 
 def runner_files():
     return {name: hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
-            for name in ('behavior_eval.py', 'observation_eval.py')
+            for name in ('behavior_eval.py', 'observation_eval.py', 'probe_sandbox.py')
             for path in [Path(__file__).with_name(name)]}
 
 
@@ -1292,8 +1403,14 @@ def runtime_identity():
     env = {k: v for k, v in os.environ.items() if k.startswith(('CODEX_', 'OPENAI_', 'AZURE_OPENAI_'))
            or k in {'PATH', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'}}
     home = Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex')))
-    configs = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
-               for p in (home / 'config.toml', home / 'AGENTS.md', home / 'AGENTS.override.md')}
+    # All runs use --ignore-user-config. Only the first nonempty global instructions file is loaded.
+    configs = {}
+    for path in (home / 'AGENTS.override.md', home / 'AGENTS.md'):
+        if path.is_file():
+            content = path.read_bytes()
+            if content.strip():
+                configs[str(path)] = hashlib.sha256(content).hexdigest()
+                break
     return {'environment_sha256': digest(env), 'config_files': configs,
             'rules': snapshot(home / 'rules'), 'python': sys.version, 'platform': list(os.uname())[:3]}
 
@@ -1640,7 +1757,7 @@ def main():
     runner.add_argument('--baseline', required=True, type=Path)
     runner.add_argument('--candidate', type=Path, default=ROOT)
     runner.add_argument('--output', required=True, type=Path)
-    runner.add_argument('--suite', choices=SUITES, default='legacy')
+    runner.add_argument('--suite', choices=SUITES, required=True)
     runner.add_argument('--scenarios')
     runner.add_argument('--split', choices=('development', 'holdout', 'all'), help='selection-v1 only; defaults to development')
     runner.add_argument('--include-no-skill', action='store_true', help='Add a third control without local Skills for natural task suites.')

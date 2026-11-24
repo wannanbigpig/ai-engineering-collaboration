@@ -1,15 +1,15 @@
 ---
 name: aitasks-maintenance
-description: "代码编辑任务自动记录 todo，重复问题自动沉淀经验，并在记录过量时归档清理 .aitasks；只读任务不写入。"
+description: "代码编辑时维护 todo，明确请求或两次独立任务确认同因后记录经验，按阈值归档。只读任务不写入。"
 license: MIT
 compatibility: universal
 metadata:
-  version: 1.7.15
+  version: 1.7.16
 ---
 
 # `.aitasks` 维护
 
-代码编辑一任务一条 todo；用户明确要求或同一问题第二次实质出现时维护经验。只读任务不写记录、计数或归档。
+代码编辑一任务一条 todo。用户明确要求或两次独立任务确认同因时记录经验。只读任务不写记录、计数或归档。
 
 ## 触发与边界
 
@@ -25,7 +25,8 @@ metadata:
 - 实际帮助解决问题后才 `mark-used --id … --task-id … --maintain`，同任务重复调用不加次数。查询、读取和未采用的候选不计。`upsert-lesson`、完成命令及带 `--maintain` 的写入已检查阈值，无需再跑 `status`；手工或旧命令写入后补检查，先归档再移出，不删除归档。
 - 新证据证明经验失效时，用 `set-lesson-status --id … --status retired --reason …` 停用；被已有新经验替代用 `superseded --superseded-by …`。默认查询排除这两类，按 ID 仍可审计并可恢复 `active`；不因年代久或已归档自动判失效。
 - `.aitasks/` 首次创建前按 [维护参考](references/maintenance.md#首次创建与忽略规则) 核对忽略规则。新建命令要求该目录已存在且非软链接，不修改 `.gitignore`。
-- 无 Python 3.10+ 或需手工维护时，按 [todo](assets/todo.md)、[经验](assets/lessons.md) 单条模板追加；新记录用唯一 UUID4，复用保留 ID，不批量改旧结构或回填元数据。状态更新不必重读模板。
+- 无可用 Python 3.10+ 或需手工维护时，在写入授权内按 [todo](assets/todo.md)、[经验](assets/lessons.md) 单条模板操作。新记录用唯一 UUID4，复用保留 ID，不批量改旧结构或回填元数据。状态更新无需重读模板。
+- 手工记录经验遵守同样的准入条件。有已授权维护的 todo 时，可在对应结果中保留已确认的原因及证据位置。后续从不同任务 ID 的既有结果核对两次独立同因后才自动沉淀，无法核实则暂缓。显式要求时可立即按模板记录，未证实的原因标为“未确认”。
 
 ## 经验动作
 
